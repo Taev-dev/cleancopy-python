@@ -14,6 +14,7 @@ from lark.common import ParserConf
 from lark.lark import LarkOptions
 from lark.lark import PostLex
 from lark.lexer import ContextualLexer
+from lark.lexer import Lexer
 from lark.lexer import Token
 from lark.load_grammar import GrammarBuilder
 from lark.parser_frontends import ParsingFrontend
@@ -44,7 +45,16 @@ TERMINAL_COMMENT_END = '_COMMENT_END'
 
 
 def parse(text):
-    raw_tree = _build_lark_parse_method()(text)
+    parser_container = Lark(
+        _GRAMMAR,
+        parser='lalr',
+        postlex=CleancopyPostlexer(),
+        start='document',
+        # This is where we insert our custom contextual lexer. It's completely
+        # undocumented within lark, but after tons of reading source code, this
+        # is the best thing I came up with.
+        _plugins={'ContextualLexer': CleancopyLexer})
+    raw_tree = parser_container.parse(text)
     return CstTransformer().transform(raw_tree)
 
 
@@ -80,6 +90,12 @@ a conflict of sorts between the dedent and the workaround.
 I'm not 100% sure, but I think a solution MIGHT be to create a custom lexer.
 """
 
+
+class CleancopyLexer(ContextualLexer):
+
+    def lex(self, *args, **kwargs):
+        print('within cleancopy lexer')
+        yield from super().lex(*args, **kwargs)
 
 
 class CleancopyPostlexer(PostLex):
@@ -187,86 +203,6 @@ def _get_indent_level(indentation: str):
 
     spacelike_indent_level = spacelike_count // INDENT_DEPTH
     return spacelike_indent_level + tab_count
-
-
-# Might need to define actual lark options. See class LarkOptions within
-# lark/lark.py
-def _build_lark_parse_method():
-    postlex = CleancopyPostlexer()
-    start_rule = 'document'
-    options = LarkOptions(options_dict=dict(
-        # debug=False,
-        # keep_all_tokens=False,
-        # tree_class=None,
-        # cache=False,
-        postlex=postlex,
-        parser='lalr',
-        start=[start_rule],
-        transformer=None,
-        # This is where we insert our custom contextual lexer
-        _plugins={'ContextualLexer': ContextualLexer}))
-    lexer_conf, parser_conf = _build_lark_confs(
-        start=start_rule,
-        options=options,
-        postlex=postlex)
-    lark_frontend = ParsingFrontend(lexer_conf, parser_conf, options)
-    return functools.partial(
-        lark_frontend.parse, start=start_rule, on_error=None)
-
-
-def _build_lark_confs(*, start, postlex, options, terminals_to_keep=None):
-    """This bypasses the vast majority of... detritus... within lark,
-    building both a parser and a lexer configuration directly. This
-    makes it easier for us to use our own custom lexer.
-    """
-    if terminals_to_keep is None:
-        terminals_to_keep = set()
-
-    # This compiles the EBNF grammar into BNF
-    terminals, rules, ignore_tokens = _GRAMMAR.compile(
-        [start], terminals_to_keep)
-    lexer_conf = LexerConf(
-        terminals=terminals,
-        re_module=re,
-        ignore=ignore_tokens,
-        postlex=postlex,
-        # The rest is just duplicating defaults, because this is completely
-        # undocumented within lark -- it's faster to just reproduce it here
-        # than hunt around in the source code there
-        callbacks=None,
-        g_regex_flags=0,
-        skip_validation=False,
-        use_bytes=False)
-
-    lexer_conf.lexer_type = 'contextual'
-
-    callbacks = _get_lexer_callbacks(options.transformer, terminals)
-    parser_conf = ParserConf(rules, callbacks, [start])
-    parser_conf.parser_type = 'lalr'
-
-    return lexer_conf, parser_conf
-
-
-def _get_lexer_callbacks(transformer, terminals):
-    """This is basically a direct duplicate of the lark source code.
-    We're reproducing it here for two reasons: first, it's not part of
-    the public lark API, and second, because it documents exactly where
-    the "magic" happens that ties the terminal name to the methods to
-    be called within the transformer. So we could, in theory, use this
-    as a hook to replace the magic make-sure-the-names-are-the-same
-    detection with a decorator-based one.
-    """
-    callbacks = {}
-    for terminal in terminals:
-        this_terminal_name = terminal.name
-        # This is where the "magic" happens: it matches the terminal name with
-        # a method defined on the transformer. If it finds one, it defines it
-        # as a callback for the lexer for that particular terminal name.
-        maybe_callback = getattr(transformer, this_terminal_name, None)
-        if maybe_callback is not None:
-            callbacks[this_terminal_name] = maybe_callback
-
-    return callbacks
 
 
 def test():
