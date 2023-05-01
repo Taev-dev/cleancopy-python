@@ -1,0 +1,20 @@
+?document: _EMPTY_LINE* [version_comment _EOL _EMPTY_LINE*] [node_root]
+// ?document: _EMPTY_LINE* [node_root]
+
+
+// Note: this is just temporary; it needs to get tied into the way we do
+// comments, whatever that ends up being
+version_comment: "<<<cleancopy>>>"
+node_root: ((LINE | node_nested | _EMPTY_LINE) (_EOL | NEWLINE_THEN_EMPTY | NEWLINE_THEN_INDENTATION))+
+node_nested: _INDENT node_root _DEDENT
+
+
+%declare _INDENT _DEDENT _EMPTY_LINE _EOL
+// ... I can't get this to work with character classes WTF
+NEWLINE_THEN_EMPTY.2: /\r?\n(?:(?!\r|\n)\s)*(?=\r?\n)/
+// This would be wrong regardless because it would greedily consume the newline
+// as part of the \s
+// _EMPTY_LINE.2: /(\r?\n\s*\r?\n)/
+// TODO: this needs to support other kinds of whitespace characters!
+NEWLINE_THEN_INDENTATION.1: /\r?\n(?:(?!\r|\n)\s)*/
+LINE: /.+/
