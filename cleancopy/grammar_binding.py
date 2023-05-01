@@ -1,23 +1,19 @@
 """The grammar binding produces a CST from the grammar, using whatever
 third-party parser generator library we decide to use.
 """
-import functools
-import re
-from dataclasses import dataclass
+from copy import copy
 from pathlib import Path
-from typing import Any
+from typing import Collection
 
 from lark import Lark
 from lark import Transformer
-from lark.common import LexerConf
-from lark.common import ParserConf
-from lark.lark import LarkOptions
+from lark.exceptions import UnexpectedCharacters
+from lark.exceptions import UnexpectedToken
 from lark.lark import PostLex
-from lark.lexer import ContextualLexer
+from lark.lexer import BasicLexer
 from lark.lexer import Lexer
 from lark.lexer import Token
 from lark.load_grammar import GrammarBuilder
-from lark.parser_frontends import ParsingFrontend
 
 from cleancopy.cst_nodes import CleancopyDocument
 from cleancopy.cst_nodes import ContentLine
@@ -91,11 +87,91 @@ I'm not 100% sure, but I think a solution MIGHT be to create a custom lexer.
 """
 
 
-class CleancopyLexer(ContextualLexer):
+class CleancopyLexer(Lexer):
 
-    def lex(self, *args, **kwargs):
-        print('within cleancopy lexer')
-        yield from super().lex(*args, **kwargs)
+    def __init__(
+            self,
+            lexer_conf,
+            states: dict[str, Collection[str]],
+            always_accept: Collection[str] = None):
+
+        if always_accept is None:
+            always_accept = frozenset()
+
+        terminals_by_name = lexer_conf.terminals_by_name
+
+        # Note that the lark contextual lexer does some regex-based validity
+        # checking here if an optional upstream dep is installed
+
+        lexers = self._lexers = {}
+        # This lets us reuse the lexer if another parser state accepts the same
+        # set of valid next tokens
+        lexer_reuse_lookup: dict[frozenset[str], BasicLexer] = {}
+
+        for parser_state, valid_next_tokens in states.items():
+            lexer_reuse_key = valid_next_tokens = frozenset(valid_next_tokens)
+
+            if lexer_reuse_key in lexer_reuse_lookup:
+                child_lexer = lexer_reuse_lookup[lexer_reuse_key]
+            else:
+                # This can be slightly different than valid_next_tokens
+                # depending on our settings
+                child_lexer_tokens = (
+                    valid_next_tokens
+                    | frozenset(lexer_conf.ignore)
+                    | frozenset(always_accept))
+                child_lexer_conf = copy(lexer_conf)
+                child_lexer_conf.terminals = [
+                    terminals_by_name[token] for token in child_lexer_tokens
+                    if token in terminals_by_name]
+                child_lexer = BasicLexer(child_lexer_conf)
+                lexer_reuse_lookup[lexer_reuse_key] = child_lexer
+
+            lexers[parser_state] = child_lexer
+
+        fallback_lexer_conf = copy(lexer_conf)
+        fallback_lexer_conf.terminals = list(lexer_conf.terminals)
+        fallback_lexer_conf.skip_validation = True
+        self._fallback_lexer = BasicLexer(fallback_lexer_conf)
+
+    def lex(self, lexer_state, parser_state):
+        try:
+            while True:
+                try:
+                    current_token = parser_state.position
+                    contextual_lexer = self._lexers[current_token]
+                    yield contextual_lexer.next_token(
+                        lexer_state, parser_state)
+                except EOFError:
+                    break
+
+        # Contextual lexers work by restricting the possible set of terminals
+        # based on the current parse context. That means that we might have a
+        # token that is valid in a different parse context, but invalid here.
+        # In that case, we can attempt to do a fallback parse, just to present
+        # a nicer parse error in case the terminal is valid elsewhere.
+        except UnexpectedCharacters as invalid_parse_exc:
+            # The fallback parsing will screw up the parse state, and we can't
+            # rewind, so preserve it here.
+            last_valid_token = lexer_state.last_token
+
+            try:
+                fallback_token = self._fallback_lexer.next_token(
+                    lexer_state, parser_state)
+            except UnexpectedCharacters:
+                # We don't have any valid terminal, in any valid context, for
+                # this character, so we can't give a fallback.
+                # Raising from None allows us to drop the nested exception and
+                # return to the original one, resulting in a nicer traceback.
+                raise invalid_parse_exc from None
+            else:
+                raise UnexpectedToken(
+                    fallback_token,
+                    invalid_parse_exc.allowed,
+                    state=parser_state,
+                    token_history=[last_valid_token],
+                    terminals_by_name=self._fallback_lexer.terminals_by_name
+                ) from None
 
 
 class CleancopyPostlexer(PostLex):
