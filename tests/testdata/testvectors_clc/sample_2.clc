@@ -1,0 +1,15 @@
+> A note on comments
+id: 'the_first_section'
+summary: 'Comments. Do you speak them?'
+    <<<Note that comments are supported. An optional top-of-file comment as
+    above can be used if you want a way to detect syntax simply.>>>
+
+    Also note that escape sequences take precedence over comments. So if you
+    want to have a literal ``(((>>>)))`` sequence, you can just put it in
+    triple parentheses like this: ``[[[(((>>>)))]]]``
+
+
+Any node with a type declaration is treated as not-clean-copy. Applications
+that understand that type should process it accordingly, but any applications
+that don't understand the type should treat it as block raw text, similar to
+a generic code block.
