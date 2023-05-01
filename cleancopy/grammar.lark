@@ -5,7 +5,7 @@
 // Note: this is just temporary; it needs to get tied into the way we do
 // comments, whatever that ends up being
 version_comment: "<<<cleancopy>>>"
-node_root: ((LINE | node_nested | _EMPTY_LINE) (_EOL | NEWLINE_THEN_EMPTY | NEWLINE_THEN_INDENTATION))+
+node_root: ((LINE | node_nested | _EMPTY_LINE) _EOL)+
 node_nested: _INDENT node_root _DEDENT
 
 

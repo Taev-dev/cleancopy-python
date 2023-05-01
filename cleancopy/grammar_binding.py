@@ -69,22 +69,27 @@ _token_dispatch.registry = {}
 
 
 """
-NOTE:
-Okay, so, it turns out that the default lexer doesn't look into the
-terminals that might result in a postlex additional token, UNLESS it also
-matches another found terminal.
+TODO:
+AIGHT, so my hunch was correct.
 
-As a workaround, I just threw in the temporary terminals as valid parts of
-the grammar, even though they'll just be immediately postlexed away. This
-got me past the first problem, but now it's failing after the first dedent
-token.
+The postlex tomfoolery I'm doing is interfering with the parsing.
+The solution, I think, is going to be relatively straightforward:
+instead of implementing indentation as a postlex stage, you should add
+it as part of a custom lexer.
 
-I think, maybe, just maybe, the issue is that there's some funkiness where
-in order to create the dedent token, something funky is happening and there's
-a conflict of sorts between the dedent and the workaround.
-
-I'm not 100% sure, but I think a solution MIGHT be to create a custom lexer.
+Then, the lexer is responsible for creating the declared tokens, instead
+of the postlex stage.
 """
+
+
+def _get_parent_terminals(terminal_name):
+    """This returns a set for any terminals that get added during
+    postlex, consisting of the terminals that they are derived from.
+    """
+    if terminal_name in {TERMINAL_EMPTY_LINE, TERMINAL_EOL}:
+        return {TERMINAL_NL_THEN_INDENT, TERMINAL_NL_THEN_EMPTY}
+    else:
+        return set()
 
 
 class CleancopyLexer(Lexer):
@@ -99,6 +104,7 @@ class CleancopyLexer(Lexer):
             always_accept = frozenset()
 
         terminals_by_name = lexer_conf.terminals_by_name
+        print(terminals_by_name)
 
         # Note that the lark contextual lexer does some regex-based validity
         # checking here if an optional upstream dep is installed
@@ -108,7 +114,7 @@ class CleancopyLexer(Lexer):
         # set of valid next tokens
         lexer_reuse_lookup: dict[frozenset[str], BasicLexer] = {}
 
-        for parser_state, valid_next_tokens in states.items():
+        for parser_state_token, valid_next_tokens in states.items():
             lexer_reuse_key = valid_next_tokens = frozenset(valid_next_tokens)
 
             if lexer_reuse_key in lexer_reuse_lookup:
@@ -119,7 +125,9 @@ class CleancopyLexer(Lexer):
                 child_lexer_tokens = (
                     valid_next_tokens
                     | frozenset(lexer_conf.ignore)
-                    | frozenset(always_accept))
+                    | frozenset(always_accept)
+                    | _get_parent_terminals(parser_state_token))
+                print(child_lexer_tokens)
                 child_lexer_conf = copy(lexer_conf)
                 child_lexer_conf.terminals = [
                     terminals_by_name[token] for token in child_lexer_tokens
@@ -127,7 +135,7 @@ class CleancopyLexer(Lexer):
                 child_lexer = BasicLexer(child_lexer_conf)
                 lexer_reuse_lookup[lexer_reuse_key] = child_lexer
 
-            lexers[parser_state] = child_lexer
+            lexers[parser_state_token] = child_lexer
 
         fallback_lexer_conf = copy(lexer_conf)
         fallback_lexer_conf.terminals = list(lexer_conf.terminals)
@@ -140,8 +148,10 @@ class CleancopyLexer(Lexer):
                 try:
                     current_token = parser_state.position
                     contextual_lexer = self._lexers[current_token]
-                    yield contextual_lexer.next_token(
+                    next_token = contextual_lexer.next_token(
                         lexer_state, parser_state)
+                    print(f'<{next_token.type}>: {next_token.strip()}')
+                    yield next_token
                 except EOFError:
                     break
 
@@ -151,6 +161,9 @@ class CleancopyLexer(Lexer):
         # In that case, we can attempt to do a fallback parse, just to present
         # a nicer parse error in case the terminal is valid elsewhere.
         except UnexpectedCharacters as invalid_parse_exc:
+            print(contextual_lexer)
+            print(contextual_lexer.terminals)
+
             # The fallback parsing will screw up the parse state, and we can't
             # rewind, so preserve it here.
             last_valid_token = lexer_state.last_token
@@ -175,6 +188,9 @@ class CleancopyLexer(Lexer):
 
 
 class CleancopyPostlexer(PostLex):
+    always_accept = {
+        TERMINAL_EOL, TERMINAL_EMPTY_LINE, TERMINAL_INDENT, TERMINAL_DEDENT,
+        TERMINAL_NL_THEN_INDENT, TERMINAL_NL_THEN_EMPTY}
     indent_level: int
     within_comment: bool
 
@@ -182,12 +198,7 @@ class CleancopyPostlexer(PostLex):
         self.within_comment = False
         self.indent_level = 0
 
-    def process(self, token_stream):
-        for token in self._process(token_stream):
-            print(f'<{token.type}>: {token.strip()}')
-            yield token
-
-    def _process(self, token_stream, _token_handlers=_token_dispatch.registry):
+    def process(self, token_stream, _token_handlers=_token_dispatch.registry):
         for token in token_stream:
             terminal_type = token.type
             if terminal_type in _token_handlers:
