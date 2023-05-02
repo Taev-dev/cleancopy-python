@@ -2,6 +2,7 @@
 third-party parser generator library we decide to use.
 """
 from copy import copy
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Collection
 
@@ -34,8 +35,8 @@ TERMINAL_EOL = '_EOL'
 TERMINAL_EMPTY_LINE = '_EMPTY_LINE'
 TERMINAL_NL_THEN_INDENT = 'NEWLINE_THEN_INDENTATION'
 TERMINAL_NL_THEN_EMPTY = 'NEWLINE_THEN_EMPTY'
-TERMINAL_INDENT = '_INDENT'
-TERMINAL_DEDENT = '_DEDENT'
+TERMINAL_BLOCK_BEGIN = '_BLOCK_BEGIN'
+TERMINAL_BLOCK_END = '_BLOCK_END'
 TERMINAL_COMMENT_BEGIN = '_COMMENT_BEGIN'
 TERMINAL_COMMENT_END = '_COMMENT_END'
 
@@ -44,7 +45,7 @@ def parse(text):
     parser_container = Lark(
         _GRAMMAR,
         parser='lalr',
-        postlex=CleancopyPostlexer(),
+        postlex=_ShimShamPostlex(),
         start='document',
         # This is where we insert our custom contextual lexer. It's completely
         # undocumented within lark, but after tons of reading source code, this
@@ -60,26 +61,12 @@ def _token_dispatch(terminal_name):
     global module state to work (I know that's gross!)
     """
     def decorator(func):
-        _token_dispatch.registry[terminal_name] = func.__name__
+        _token_dispatch.registry[terminal_name] = func
         return func
     return decorator
 
 
 _token_dispatch.registry = {}
-
-
-"""
-TODO:
-AIGHT, so my hunch was correct.
-
-The postlex tomfoolery I'm doing is interfering with the parsing.
-The solution, I think, is going to be relatively straightforward:
-instead of implementing indentation as a postlex stage, you should add
-it as part of a custom lexer.
-
-Then, the lexer is responsible for creating the declared tokens, instead
-of the postlex stage.
-"""
 
 
 def _get_parent_terminals(terminal_name):
@@ -98,13 +85,15 @@ class CleancopyLexer(Lexer):
             self,
             lexer_conf,
             states: dict[str, Collection[str]],
-            always_accept: Collection[str] = None):
+            always_accept: Collection[str] = None,
+            *args,
+            **kwargs):
+        super().__init__(*args, **kwargs)
 
         if always_accept is None:
             always_accept = frozenset()
 
         terminals_by_name = lexer_conf.terminals_by_name
-        print(terminals_by_name)
 
         # Note that the lark contextual lexer does some regex-based validity
         # checking here if an optional upstream dep is installed
@@ -127,7 +116,6 @@ class CleancopyLexer(Lexer):
                     | frozenset(lexer_conf.ignore)
                     | frozenset(always_accept)
                     | _get_parent_terminals(parser_state_token))
-                print(child_lexer_tokens)
                 child_lexer_conf = copy(lexer_conf)
                 child_lexer_conf.terminals = [
                     terminals_by_name[token] for token in child_lexer_tokens
@@ -142,18 +130,63 @@ class CleancopyLexer(Lexer):
         fallback_lexer_conf.skip_validation = True
         self._fallback_lexer = BasicLexer(fallback_lexer_conf)
 
-    def lex(self, lexer_state, parser_state):
-        try:
-            while True:
-                try:
-                    current_token = parser_state.position
-                    contextual_lexer = self._lexers[current_token]
-                    next_token = contextual_lexer.next_token(
-                        lexer_state, parser_state)
-                    print(f'<{next_token.type}>: {next_token.strip()}')
+    def _do_lex(self, clc_lex_state, lexer_state, parser_state):
+        """This is called by lex() to handle the actual lexing."""
+        token_handlers = _token_dispatch.registry
+
+        while True:
+            try:
+                current_token = parser_state.position
+                contextual_lexer = self._lexers[current_token]
+                next_token = contextual_lexer.next_token(
+                    lexer_state, parser_state)
+
+                token_type = next_token.type
+                if token_type in token_handlers:
+                    yield from token_handlers[token_type](
+                        clc_lex_state, next_token)
+                else:
                     yield next_token
-                except EOFError:
-                    break
+
+            except EOFError:
+                break
+
+        # Okay, so... parsing the end of the file is a little bit tricky.
+        # Because of the shenanigans we're doing to work around the lack of
+        # zero-width tokens, we can't actually detect an empty line at the end
+        # of the file -- we're looking for a line with only whitespace before
+        # the **next newline**, but the next newline will never come. But this
+        # also means we can't detect the EOL if the file ends on a non-blank
+        # line. The solution is to check the last token we found; if it was
+        # an EOL, then we KNOW it has to be an empty line, and if not, then
+        # we KNOW it wasn't. Either way, we know what to do.
+        if clc_lex_state.last_token.type == TERMINAL_EOL:
+            yield Token.new_borrow_pos(
+                TERMINAL_EMPTY_LINE, next_token, next_token)
+        yield Token.new_borrow_pos(TERMINAL_EOL, next_token, next_token)
+
+        while clc_lex_state.indent_level > 0:
+            clc_lex_state.indent_level -= 1
+            yield Token(TERMINAL_BLOCK_END, '')
+
+    def lex(self, lexer_state, parser_state):
+        """This method delegates the actual lexing to self._do_lex(),
+        and mostly is just responsible for error handling and logging.
+        """
+        print('entering lexer!')
+        clc_lex_state = _CleancopyLexState(
+            indent_level=0, within_comment=False)
+
+        try:
+            for next_token in self._do_lex(
+                clc_lex_state, lexer_state, parser_state
+            ):
+                print(f'<{next_token.type}>: {next_token.strip()}')
+                # I hate that we're manipulating the state both within and
+                # outside of the iterator, but it makes the code much simpler.
+                # Hopefully nothing breaks!
+                clc_lex_state.last_token = next_token
+                yield next_token
 
         # Contextual lexers work by restricting the possible set of terminals
         # based on the current parse context. That means that we might have a
@@ -161,9 +194,6 @@ class CleancopyLexer(Lexer):
         # In that case, we can attempt to do a fallback parse, just to present
         # a nicer parse error in case the terminal is valid elsewhere.
         except UnexpectedCharacters as invalid_parse_exc:
-            print(contextual_lexer)
-            print(contextual_lexer.terminals)
-
             # The fallback parsing will screw up the parse state, and we can't
             # rewind, so preserve it here.
             last_valid_token = lexer_state.last_token
@@ -187,78 +217,80 @@ class CleancopyLexer(Lexer):
                 ) from None
 
 
-class CleancopyPostlexer(PostLex):
-    always_accept = {
-        TERMINAL_EOL, TERMINAL_EMPTY_LINE, TERMINAL_INDENT, TERMINAL_DEDENT,
-        TERMINAL_NL_THEN_INDENT, TERMINAL_NL_THEN_EMPTY}
+@dataclass
+class _CleancopyLexState:
     indent_level: int
     within_comment: bool
+    # Set after the first token! Note that this is slightly different than the
+    # lark last token, because we modify the tokens being produced during
+    # lexing. So these are the tokens we **return** to the parser.
+    last_token: Token = None
 
-    def __init__(self):
-        self.within_comment = False
-        self.indent_level = 0
 
-    def process(self, token_stream, _token_handlers=_token_dispatch.registry):
-        for token in token_stream:
-            terminal_type = token.type
-            if terminal_type in _token_handlers:
-                yield from getattr(self, _token_handlers[terminal_type])(token)
-            else:
-                yield token
+@_token_dispatch(TERMINAL_NL_THEN_INDENT)
+def _process_nl_then_indentation(clc_lex_state, token):
+    """Checks for indentation on a newline, potentially yielding
+    indent/dedent tokens in addition to the passed token.
+    """
+    yield Token.new_borrow_pos(TERMINAL_EOL, token, token)
+    if clc_lex_state.within_comment:
+        # yield Token.new_borrow_pos(TERMINAL_EOL, token, token)
+        return
 
-        while self.indent_level > 0:
-            self.indent_level -= 1
-            yield Token(TERMINAL_DEDENT, '')
+    # Note that we might have a carriage return in addition to the
+    # newline, so we discard both like this
+    indent_str = token.rsplit('\n', 1)[1]
+    indent_level = _get_indent_level(indent_str)
 
-    @_token_dispatch(TERMINAL_NL_THEN_INDENT)
-    def process_nl_then_indentation(self, token):
-        """Checks for indentation on a newline, potentially yielding
-        indent/dedent tokens in addition to the passed token.
-        """
-        yield Token.new_borrow_pos(TERMINAL_EOL, token, token)
+    while indent_level > clc_lex_state.indent_level:
+        clc_lex_state.indent_level += 1
+        yield Token.new_borrow_pos(TERMINAL_BLOCK_BEGIN, indent_str, token)
 
-        if self.within_comment:
-            return
+    while indent_level < clc_lex_state.indent_level:
+        clc_lex_state.indent_level -= 1
+        yield Token.new_borrow_pos(TERMINAL_BLOCK_END, indent_str, token)
 
-        # Note that we might have a carriage return in addition to the
-        # newline, so we discard both like this
-        indent_str = token.rsplit('\n', 1)[1]
-        indent_level = _get_indent_level(indent_str)
 
-        while indent_level > self.indent_level:
-            self.indent_level += 1
-            yield Token.new_borrow_pos(TERMINAL_INDENT, indent_str, token)
+@_token_dispatch(TERMINAL_NL_THEN_EMPTY)
+def _process_nl_then_empty(clc_lex_state, token):
+    """Lark doesn't support zero-width terminals, so we use a
+    special terminal for empty lines that also includes a newline,
+    and then we use this to split it into a newline and an empty
+    line.
+    """
+    yield Token.new_borrow_pos(TERMINAL_EOL, token, token)
+    yield Token.new_borrow_pos(TERMINAL_EMPTY_LINE, '', token)
 
-        while indent_level < self.indent_level:
-            self.indent_level -= 1
-            yield Token.new_borrow_pos(TERMINAL_DEDENT, indent_str, token)
 
-    @_token_dispatch(TERMINAL_NL_THEN_EMPTY)
-    def process_nl_then_empty(self, token):
-        """Lark doesn't support zero-width terminals, so we use a
-        special terminal for empty lines that also includes a newline,
-        and then we use this to split it into a newline and an empty
-        line.
-        """
-        yield Token.new_borrow_pos(TERMINAL_EOL, token, token)
-        yield Token.new_borrow_pos(TERMINAL_EMPTY_LINE, '', token)
+@_token_dispatch(TERMINAL_COMMENT_BEGIN)
+def _process_comment_begin(clc_lex_state, token):
+    """Sets within_comment appropriately, so that we temporarily
+    ignore indentation changes within newlines until we exit the
+    comment.
+    """
+    clc_lex_state.within_comment = True
+    yield token
 
-    @_token_dispatch(TERMINAL_COMMENT_BEGIN)
-    def process_comment_begin(self, token):
-        """Sets within_comment appropriately, so that we temporarily
-        ignore indentation changes within newlines until we exit the
-        comment.
-        """
-        self.within_comment = True
-        yield token
 
-    @_token_dispatch(TERMINAL_COMMENT_END)
-    def process_comment_end(self, token):
-        """Resumes normal indentation processing at the end of a comment
-        block.
-        """
-        self.within_comment = False
-        yield token
+@_token_dispatch(TERMINAL_COMMENT_END)
+def _process_comment_end(clc_lex_state, token):
+    """Resumes normal indentation processing at the end of a comment
+    block.
+    """
+    clc_lex_state.within_comment = False
+    yield token
+
+
+class _ShimShamPostlex(PostLex):
+    """This is a shim class. The ONLY purpose it serves is to pass in
+    the always_accept parameter, because that's the only way we have to
+    make sure that our derived terminals get kept during grammar
+    compilation.
+    """
+    always_accept = {TERMINAL_NL_THEN_INDENT, TERMINAL_NL_THEN_EMPTY}
+
+    def process(self, stream):
+        yield from stream
 
 
 class CstTransformer(Transformer):
@@ -271,7 +303,7 @@ class CstTransformer(Transformer):
         return EmptyLine(token=value)
 
     def node_root(self, value):
-        return DocumentNode(content_lines=list(value))
+        return DocumentNode(content_lines=list(value), metadata_lines=None)
 
     def content_line(self, value):
         return ContentLine(token=value)

@@ -1,15 +1,18 @@
-?document: _EMPTY_LINE* [version_comment _EOL _EMPTY_LINE*] [node_root]
+?document: [version_comment _EOL] [node_root]
 // ?document: _EMPTY_LINE* [node_root]
 
 
 // Note: this is just temporary; it needs to get tied into the way we do
 // comments, whatever that ends up being
 version_comment: "<<<cleancopy>>>"
-node_root: ((LINE | node_nested | _EMPTY_LINE) _EOL)+
-node_nested: _INDENT node_root _DEDENT
+node_root: (LINE _EOL | node_nested | _EMPTY_LINE _EOL)+
+node_nested: _BLOCK_BEGIN node_root _BLOCK_END
 
 
-%declare _INDENT _DEDENT _EMPTY_LINE _EOL
+// TODO: Decide if you want to use an _EOL token or a LINE token. I'm not sure
+// if this would be better or worse for the CST -> AST transform, which might
+// also use lark (using another custom lexer)
+%declare _BLOCK_BEGIN _BLOCK_END _EMPTY_LINE _EOL
 // ... I can't get this to work with character classes WTF
 NEWLINE_THEN_EMPTY.2: /\r?\n(?:(?!\r|\n)\s)*(?=\r?\n)/
 // This would be wrong regardless because it would greedily consume the newline
