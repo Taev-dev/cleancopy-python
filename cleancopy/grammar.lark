@@ -5,8 +5,12 @@
 // Note: this is just temporary; it needs to get tied into the way we do
 // comments, whatever that ends up being
 version_comment: "<<<cleancopy>>>"
-node_root: (LINE _EOL | node_nested | _EMPTY_LINE _EOL)+
+node_root: (node_line_content | node_nested | node_line_empty)+
 node_nested: _BLOCK_BEGIN node_root _BLOCK_END
+node_line_empty: _EMPTY_LINE _EOL
+node_line_content: LINE _EOL
+node_line_metadata: "$impossible!^"
+node_line_embed: "$placeholders!^"
 
 
 // TODO: Decide if you want to use an _EOL token or a LINE token. I'm not sure

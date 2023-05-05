@@ -294,22 +294,43 @@ class _ShimShamPostlex(PostLex):
 
 
 class CstTransformer(Transformer):
-    """This class transforms a lark parse tree into a cleancopy CST."""
+    """This class transforms a lark parse tree into a cleancopy CST.
+    Note that these need to match the grammar EXACTLY, including the
+    places where _EOLs are defined.
+    """
+
+    def node_nested(self, value):
+        __, node_root, __ = value
+        return node_root
+
+    def node_line_empty(self, value):
+        # empty_line, EOL
+        token, __ = value
+        return EmptyLine(
+            # Note that this is including the \n from the previous line, so we
+            # need to artificially drop that.
+            # start_line=token.line,
+            # start_col=token.column,
+            start_line=token.end_line,
+            start_col=1,
+            end_line=token.end_line,
+            end_col=token.end_column)
+
+    def node_line_content(self, value):
+        line, __ = value
+        return ContentLine(token=line)
 
     def version_comment(self, value):
         return VersionComment(version=value)
 
-    def empty_line(self, value):
-        return EmptyLine(token=value)
-
     def node_root(self, value):
         return DocumentNode(content_lines=list(value), metadata_lines=None)
 
-    def content_line(self, value):
-        return ContentLine(token=value)
-
-    # def document(self):
-    #     return ClcDocumentNode()
+    def document(self, value):
+        version_comment, __, root_node = value
+        return CleancopyDocument(
+            version_comment=version_comment,
+            document_root=root_node)
 
 
 def _get_indent_level(indentation: str):
