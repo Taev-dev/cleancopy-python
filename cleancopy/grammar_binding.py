@@ -4,6 +4,7 @@ third-party parser generator library we decide to use.
 from copy import copy
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 from typing import Collection
 
 from lark import Lark
@@ -186,11 +187,19 @@ class CleancopyLexer(Lexer):
             for next_token in self._do_lex(
                 clc_lex_state, lexer_state, parser_state
             ):
-                print(f'<{next_token.type}>: {next_token.strip()}')
+                indent_level = clc_lex_state.indent_level
+                dbg_token_val = next_token.strip()
+                if len(dbg_token_val) > 25:
+                    dbg_token_val = f'{dbg_token_val[:25]}...'
+                dbg_token_desc = f'<L{indent_level} {next_token.type}>'.ljust(
+                    40)
+                print(f'{dbg_token_desc} {dbg_token_val}')
                 # I hate that we're manipulating the state both within and
                 # outside of the iterator, but it makes the code much simpler.
                 # Hopefully nothing breaks!
                 clc_lex_state.last_token = next_token
+                next_token.value = _TokenValueWrapper(
+                    value=next_token.value, indent_level=indent_level)
                 yield next_token
 
         # Contextual lexers work by restricting the possible set of terminals
@@ -220,6 +229,12 @@ class CleancopyLexer(Lexer):
                     token_history=[last_valid_token],
                     terminals_by_name=self._fallback_lexer.terminals_by_name
                 ) from None
+
+
+@dataclass(frozen=True)
+class _TokenValueWrapper:
+    value: Any
+    indent_level: int
 
 
 @dataclass
