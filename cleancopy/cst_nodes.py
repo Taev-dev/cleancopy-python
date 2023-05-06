@@ -27,6 +27,11 @@ class DocumentNode(CSTNode):
     title_lines: Any
     metadata_lines: Any
     content_lines: Any
+    # TODO: this is currently just used by metadata_lines for comments that
+    # show up within the metadata itself. Instead, they should be moved into
+    # metadata_lines, and put in order as they appear within the metadata
+    # lines.
+    comment_lines: Any
 
     def prettify(self):
         all_lines = []
@@ -44,8 +49,20 @@ class DocumentNode(CSTNode):
                     all_lines.append(textwrap.indent(nested_lines, '    '))
                 else:
                     all_lines.append(textwrap.indent(str(line), '    '))
+        if self.comment_lines is not None:
+            for line in self.comment_lines:
+                all_lines.append(textwrap.indent(str(line), '    '))
 
         return '\n'.join(all_lines)
+
+
+# TODO: this needs a way to keep track of which specific comment the line
+# belongs to. With how it is now, there's no way within the CST to tell the
+# difference between eg. one comment with two lines, and two consecutive
+# comments of one line each
+@dataclass(kw_only=True)
+class CommentLine(CSTNode):
+    text: str
 
 
 @dataclass(kw_only=True)

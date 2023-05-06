@@ -17,6 +17,7 @@ from lark.lexer import Token
 from lark.load_grammar import GrammarBuilder
 
 from cleancopy.cst_nodes import CleancopyDocument
+from cleancopy.cst_nodes import CommentLine
 from cleancopy.cst_nodes import ContentLine
 from cleancopy.cst_nodes import DocumentNode
 from cleancopy.cst_nodes import EmptyLine
@@ -39,8 +40,9 @@ TERMINAL_NL_THEN_INDENT = 'NEWLINE_THEN_INDENTATION'
 TERMINAL_NL_THEN_EMPTY = 'NEWLINE_THEN_EMPTY'
 TERMINAL_BLOCK_BEGIN = '_BLOCK_BEGIN'
 TERMINAL_BLOCK_END = '_BLOCK_END'
-TERMINAL_COMMENT_BEGIN = '_COMMENT_BEGIN'
-TERMINAL_COMMENT_END = '_COMMENT_END'
+TERMINAL_COMMENT_BEGIN = 'SYMBOL_COMMENT_BEGIN'
+TERMINAL_COMMENT_END = 'SYMBOL_COMMENT_END'
+TERMINAL_COMMENT_LINE = 'TEXT_COMMENT_LINE'
 
 _PENDING_NODE_IS_EMPTY = object()
 
@@ -177,7 +179,6 @@ class CleancopyLexer(Lexer):
         """This method delegates the actual lexing to self._do_lex(),
         and mostly is just responsible for error handling and logging.
         """
-        print('entering lexer')
         clc_lex_state = _CleancopyLexState(
             indent_level=0, within_comment=False)
 
@@ -307,11 +308,12 @@ class CstTransformer(Transformer):
         return VersionComment(version=value)
 
     def document(self, value):
-        version_comment, __, root_node_lines = value
+        version_comment, __, root_node_container = value
         root_node = DocumentNode(
             title_lines=None,
-            content_lines=root_node_lines,
-            metadata_lines=None)
+            content_lines=root_node_container.content_lines,
+            metadata_lines=None,
+            comment_lines=None)
         return CleancopyDocument(
             version_comment=version_comment,
             document_root=root_node)
@@ -320,9 +322,16 @@ class CstTransformer(Transformer):
     #################################
 
     def node_anchor(self, value):
+        content_lines = []
+
+        for line_or_container in value:
+            if isinstance(line_or_container, _CommentLinesContainer):
+                content_lines.extend(line_or_container.comment_lines)
+            else:
+                content_lines.append(line_or_container)
         # Note that the type of this needs to match up with the if/elif inside
         # pending_node_content
-        return list(value)
+        return _PendingNodeContentContainer(content_lines=content_lines)
 
     def pending_node_anchor(self, value):
         return value[0]
@@ -330,35 +339,53 @@ class CstTransformer(Transformer):
     def pending_node_empty(self, value):
         title_lines = []
         metadata_lines = []
+        comment_lines = []
 
-        for lark_parse_tree_child in value:
-            if isinstance(lark_parse_tree_child, PendingNodeMetadataLine):
-                metadata_lines.append(lark_parse_tree_child)
-            elif isinstance(lark_parse_tree_child, PendingNodeTitleLine):
-                title_lines.append(lark_parse_tree_child)
+        for parse_tree_child in value:
+            if isinstance(parse_tree_child, _PendingNodeMetadataContainer):
+                metadata_lines.extend(parse_tree_child.metadata_lines)
+                comment_lines.extend(parse_tree_child.comment_lines)
+            elif isinstance(parse_tree_child, PendingNodeTitleLine):
+                title_lines.append(parse_tree_child)
 
         return DocumentNode(
             title_lines=title_lines,
             content_lines=None,
-            metadata_lines=metadata_lines)
+            metadata_lines=metadata_lines,
+            comment_lines=comment_lines)
 
     def pending_node_content(self, value):
         title_lines = []
         content_lines = []
         metadata_lines = []
+        comment_lines = []
 
-        for lark_parse_tree_child in value:
-            if isinstance(lark_parse_tree_child, list):
-                content_lines.extend(lark_parse_tree_child)
-            elif isinstance(lark_parse_tree_child, PendingNodeMetadataLine):
-                metadata_lines.append(lark_parse_tree_child)
-            elif isinstance(lark_parse_tree_child, PendingNodeTitleLine):
-                title_lines.append(lark_parse_tree_child)
+        for parse_tree_child in value:
+            if isinstance(parse_tree_child, _PendingNodeContentContainer):
+                content_lines.extend(parse_tree_child.content_lines)
+            elif isinstance(parse_tree_child, _PendingNodeMetadataContainer):
+                metadata_lines.extend(parse_tree_child.metadata_lines)
+                comment_lines.extend(parse_tree_child.comment_lines)
+            elif isinstance(parse_tree_child, PendingNodeTitleLine):
+                title_lines.append(parse_tree_child)
 
         return DocumentNode(
             title_lines=title_lines,
             content_lines=content_lines,
-            metadata_lines=metadata_lines)
+            metadata_lines=metadata_lines,
+            comment_lines=comment_lines)
+
+    def pending_node_metadata_block(self, value):
+        metadata_lines = []
+        comment_lines = []
+        for line in value:
+            if isinstance(line, PendingNodeMetadataLine):
+                metadata_lines.append(line)
+            elif isinstance(line, _CommentLinesContainer):
+                comment_lines.extend(line.comment_lines)
+        return _PendingNodeMetadataContainer(
+            metadata_lines=metadata_lines,
+            comment_lines=comment_lines)
 
     def node_line_pending_node_empty(self, value):
         return _PENDING_NODE_IS_EMPTY
@@ -389,6 +416,29 @@ class CstTransformer(Transformer):
     def node_line_content(self, value):
         token_line, __ = value
         return ContentLine(text=token_line.value)
+
+    def comment_lines(self, value):
+        comment_lines = []
+        for token in value:
+            if token.type == TERMINAL_COMMENT_LINE:
+                comment_lines.append(CommentLine(text=token.value))
+        return _CommentLinesContainer(comment_lines=comment_lines)
+
+
+@dataclass
+class _CommentLinesContainer:
+    comment_lines: list
+
+
+@dataclass
+class _PendingNodeMetadataContainer:
+    metadata_lines: list
+    comment_lines: list
+
+
+@dataclass
+class _PendingNodeContentContainer:
+    content_lines: list
 
 
 def _get_indent_level(indentation: str):
