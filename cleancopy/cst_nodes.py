@@ -24,22 +24,26 @@ class CSTNode:
 
 @dataclass(kw_only=True)
 class DocumentNode(CSTNode):
+    title_lines: Any
     metadata_lines: Any
     content_lines: Any
 
     def prettify(self):
         all_lines = []
 
+        if self.title_lines is not None:
+            for line in self.title_lines:
+                all_lines.append(textwrap.indent(str(line), '    '))
         if self.metadata_lines is not None:
             for line in self.metadata_lines:
-                all_lines.append(line)
+                all_lines.append(textwrap.indent(str(line), '    '))
         if self.content_lines is not None:
             for line in self.content_lines:
                 if hasattr(line, 'prettify'):
                     nested_lines = line.prettify()
                     all_lines.append(textwrap.indent(nested_lines, '    '))
                 else:
-                    all_lines.append(str(line))
+                    all_lines.append(textwrap.indent(str(line), '    '))
 
         return '\n'.join(all_lines)
 
@@ -56,7 +60,7 @@ class EmptyLine(CSTNode):
 
 @dataclass(kw_only=True)
 class ContentLine(CSTNode):
-    token: Any
+    text: str
 
 
 @dataclass(kw_only=True)
@@ -66,3 +70,14 @@ class CleancopyDocument:
 
     def prettify(self):
         return self.document_root.prettify()
+
+
+@dataclass(kw_only=True)
+class PendingNodeTitleLine(CSTNode):
+    text: str
+
+
+@dataclass(kw_only=True)
+class PendingNodeMetadataLine(CSTNode):
+    key: str
+    value: str

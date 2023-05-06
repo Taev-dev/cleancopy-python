@@ -20,6 +20,8 @@ from cleancopy.cst_nodes import CleancopyDocument
 from cleancopy.cst_nodes import ContentLine
 from cleancopy.cst_nodes import DocumentNode
 from cleancopy.cst_nodes import EmptyLine
+from cleancopy.cst_nodes import PendingNodeMetadataLine
+from cleancopy.cst_nodes import PendingNodeTitleLine
 from cleancopy.cst_nodes import VersionComment
 from cleancopy.exceptions import IndentationError
 
@@ -39,6 +41,8 @@ TERMINAL_BLOCK_BEGIN = '_BLOCK_BEGIN'
 TERMINAL_BLOCK_END = '_BLOCK_END'
 TERMINAL_COMMENT_BEGIN = '_COMMENT_BEGIN'
 TERMINAL_COMMENT_END = '_COMMENT_END'
+
+_PENDING_NODE_IS_EMPTY = object()
 
 
 def parse(text):
@@ -173,7 +177,7 @@ class CleancopyLexer(Lexer):
         """This method delegates the actual lexing to self._do_lex(),
         and mostly is just responsible for error handling and logging.
         """
-        print('entering lexer!')
+        print('entering lexer')
         clc_lex_state = _CleancopyLexState(
             indent_level=0, within_comment=False)
 
@@ -299,9 +303,75 @@ class CstTransformer(Transformer):
     places where _EOLs are defined.
     """
 
-    def node_nested(self, value):
-        __, node_root, __ = value
-        return node_root
+    def version_comment(self, value):
+        return VersionComment(version=value)
+
+    def document(self, value):
+        version_comment, __, root_node_lines = value
+        root_node = DocumentNode(
+            title_lines=None,
+            content_lines=root_node_lines,
+            metadata_lines=None)
+        return CleancopyDocument(
+            version_comment=version_comment,
+            document_root=root_node)
+
+    # Starting here, we're adding in some better organization
+    #################################
+
+    def node_anchor(self, value):
+        # Note that the type of this needs to match up with the if/elif inside
+        # pending_node_content
+        return list(value)
+
+    def pending_node_anchor(self, value):
+        return value[0]
+
+    def pending_node_empty(self, value):
+        title_lines = []
+        metadata_lines = []
+
+        for lark_parse_tree_child in value:
+            if isinstance(lark_parse_tree_child, PendingNodeMetadataLine):
+                metadata_lines.append(lark_parse_tree_child)
+            elif isinstance(lark_parse_tree_child, PendingNodeTitleLine):
+                title_lines.append(lark_parse_tree_child)
+
+        return DocumentNode(
+            title_lines=title_lines,
+            content_lines=None,
+            metadata_lines=metadata_lines)
+
+    def pending_node_content(self, value):
+        title_lines = []
+        content_lines = []
+        metadata_lines = []
+
+        for lark_parse_tree_child in value:
+            if isinstance(lark_parse_tree_child, list):
+                content_lines.extend(lark_parse_tree_child)
+            elif isinstance(lark_parse_tree_child, PendingNodeMetadataLine):
+                metadata_lines.append(lark_parse_tree_child)
+            elif isinstance(lark_parse_tree_child, PendingNodeTitleLine):
+                title_lines.append(lark_parse_tree_child)
+
+        return DocumentNode(
+            title_lines=title_lines,
+            content_lines=content_lines,
+            metadata_lines=metadata_lines)
+
+    def node_line_pending_node_empty(self, value):
+        return _PENDING_NODE_IS_EMPTY
+
+    def node_line_pending_node_title(self, value):
+        __, title_text, __ = value
+        return PendingNodeTitleLine(text=str(title_text))
+
+    def node_line_pending_node_metadata(self, value):
+        token_key, __, token_value, __ = value
+        return PendingNodeMetadataLine(
+            key=token_key.value,
+            value=token_value.value)
 
     def node_line_empty(self, value):
         # empty_line, EOL
@@ -317,20 +387,8 @@ class CstTransformer(Transformer):
             end_col=token.end_column)
 
     def node_line_content(self, value):
-        line, __ = value
-        return ContentLine(token=line)
-
-    def version_comment(self, value):
-        return VersionComment(version=value)
-
-    def node_root(self, value):
-        return DocumentNode(content_lines=list(value), metadata_lines=None)
-
-    def document(self, value):
-        version_comment, __, root_node = value
-        return CleancopyDocument(
-            version_comment=version_comment,
-            document_root=root_node)
+        token_line, __ = value
+        return ContentLine(text=token_line.value)
 
 
 def _get_indent_level(indentation: str):
@@ -348,6 +406,8 @@ def _get_indent_level(indentation: str):
 def test():
     from pathlib import Path
     from cleancopy.grammar_binding import parse
+    test_path_1 = Path('./tests/testdata/testvectors_clc/sample_1.clc')
+    test_doc_1 = test_path_1.read_text()
     test_path_2 = Path('./tests/testdata/testvectors_clc/sample_2.clc')
     test_doc_2 = test_path_2.read_text()
-    return parse(test_doc_2)
+    return parse(test_doc_1), parse(test_doc_2)

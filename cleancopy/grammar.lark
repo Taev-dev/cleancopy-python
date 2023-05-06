@@ -1,17 +1,33 @@
-?document: [version_comment _EOL] [node_root]
-// ?document: _EMPTY_LINE* [node_root]
-
-
+?document: [version_comment _EOL] [node_anchor]
 // Note: this is just temporary; it needs to get tied into the way we do
 // comments, whatever that ends up being
 version_comment: "<<<cleancopy>>>"
-node_root: (node_line_content | node_nested | node_line_empty)+
-node_nested: _BLOCK_BEGIN node_root _BLOCK_END
-node_line_empty: _EMPTY_LINE _EOL
-node_line_content: LINE _EOL
-node_line_metadata: "$impossible!^"
-node_line_embed: "$placeholders!^"
 
+node_anchor: (node_line_content | pending_node_anchor | node_line_empty)+
+pending_node_anchor: pending_node_empty | pending_node_content
+
+pending_node_empty: node_line_pending_node_title+ node_line_pending_node_metadata* node_line_pending_node_empty
+pending_node_content: node_line_pending_node_title+ node_line_pending_node_metadata* _BLOCK_BEGIN node_anchor _BLOCK_END
+
+node_line_pending_node_empty: SYMBOL_NODE_EMPTY _EOL
+node_line_pending_node_title: SYMBOL_NODE_DEF [TEXT_NODE_TITLE] _EOL
+node_line_pending_node_metadata: TEXT_METADATA_KEY SYMBOL_METADATA_ASSIGNMENT TEXT_METADATA_VALUE _EOL
+
+node_line_empty: _EMPTY_LINE _EOL
+node_line_content: TEXT_CONTENT_LINE _EOL
+
+
+// Note that these will consume whitespace up until the next non-whitespace
+// character, OR until a newline
+SYMBOL_NODE_DEF: />(?!>>)[^\S\r\n]*/
+SYMBOL_NODE_EMPTY: /<(?!<<)[^\S\r\n]*/
+SYMBOL_METADATA_ASSIGNMENT: /:[^\S\r\n]*/
+TEXT_NODE_TITLE: /[^\r\n]+/
+TEXT_METADATA_KEY: /[A-z_][A-z0-9_\-]*/
+// These are temporary, just so that we can make small incremental progress
+// without needing to implement the entire world
+TEXT_METADATA_VALUE: /[^\r\n]+/
+TEXT_CONTENT_LINE: /[^\r\n]+/
 
 // TODO: Decide if you want to use an _EOL token or a LINE token. I'm not sure
 // if this would be better or worse for the CST -> AST transform, which might
@@ -24,4 +40,3 @@ NEWLINE_THEN_EMPTY.2: /\r?\n(?:(?!\r|\n)\s)*(?=\r?\n)/
 // _EMPTY_LINE.2: /(\r?\n\s*\r?\n)/
 // TODO: this needs to support other kinds of whitespace characters!
 NEWLINE_THEN_INDENTATION.1: /\r?\n(?:(?!\r|\n)\s)*/
-LINE: /.+/
