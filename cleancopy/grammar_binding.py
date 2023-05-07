@@ -1,11 +1,14 @@
 """The grammar binding produces a CST from the grammar, using whatever
 third-party parser generator library we decide to use.
 """
+import itertools
 from copy import copy
 from dataclasses import dataclass
+from math import inf
 from pathlib import Path
 from typing import Any
 from typing import Collection
+from typing import Optional
 
 from lark import Lark
 from lark import Transformer
@@ -47,6 +50,8 @@ TERMINAL_COMMENT_BEGIN = 'SYMBOL_COMMENT_BEGIN'
 TERMINAL_COMMENT_END = 'SYMBOL_COMMENT_END'
 TERMINAL_COMMENT_LINE = 'TEXT_COMMENT_LINE'
 TERMINAL_EMBED_LINE = 'TEXT_EMBED_LINE'
+TERMINAL_RECOVERED_INDENT = '_RECOVERED_INDENTATION'
+TERMINAL_PENDING_EMBED = 'TEXT_METADATA_KEY_EMBED'
 
 _PENDING_NODE_IS_EMPTY = object()
 
@@ -184,7 +189,8 @@ class CleancopyLexer(Lexer):
         and mostly is just responsible for error handling and logging.
         """
         clc_lex_state = _CleancopyLexState(
-            indent_level=0, within_comment=False, within_embed=False)
+            indent_level=0, within_comment=False, within_embed=False,
+            pending_embed=False)
 
         try:
             for next_token in self._do_lex(
@@ -192,11 +198,14 @@ class CleancopyLexer(Lexer):
             ):
                 indent_level = clc_lex_state.indent_level
                 dbg_token_val = next_token.strip()
-                if len(dbg_token_val) > 25:
-                    dbg_token_val = f'{dbg_token_val[:25]}...'
+                if len(dbg_token_val) > 45:
+                    dbg_token_val = f'{dbg_token_val[:42]}...'
+                else:
+                    dbg_token_val = dbg_token_val.ljust(45)
                 dbg_token_desc = f'<L{indent_level} {next_token.type}>'.ljust(
                     40)
-                print(f'{dbg_token_desc} {dbg_token_val}')
+                dbg_lex_state = clc_lex_state.debug_repr()
+                print(f'{dbg_token_desc}{dbg_token_val}    {dbg_lex_state}')
                 # I hate that we're manipulating the state both within and
                 # outside of the iterator, but it makes the code much simpler.
                 # Hopefully nothing breaks!
@@ -243,12 +252,18 @@ class _TokenValueWrapper:
 @dataclass
 class _CleancopyLexState:
     indent_level: int
+    pending_embed: bool
     within_comment: bool
     within_embed: bool
     # Set after the first token! Note that this is slightly different than the
     # lark last token, because we modify the tokens being produced during
     # lexing. So these are the tokens we **return** to the parser.
     last_token: Token = None
+
+    def debug_repr(self):
+        return (
+            f'<Lexstate: pend_emb {self.pending_embed}, ' +
+            f'in_emb {self.within_embed}, in_comm {self.within_comment}>')
 
 
 @_token_dispatch(TERMINAL_NL_THEN_INDENT)
@@ -257,31 +272,64 @@ def _process_nl_then_indentation(clc_lex_state, token):
     indent/dedent tokens in addition to the passed token.
     """
     yield Token.new_borrow_pos(TERMINAL_EOL, token, token)
-    if clc_lex_state.within_comment:
-        # yield Token.new_borrow_pos(TERMINAL_EOL, token, token)
-        return
+
+    # Note that both embeds and comments DO care about **shallower**
+    # indentation, but ignore deeper indentation.
+    recover_indent = clc_lex_state.within_comment or clc_lex_state.within_embed
+    detect_deeper_indentation = not recover_indent
+    pending_embed = clc_lex_state.pending_embed
 
     # Note that we might have a carriage return in addition to the
     # newline, so we discard both like this
+    # TODO: I think this is actually incorrect, because of the way that we
+    # do ordering... can lark tokens define capture groups in regex? That
+    # would be a trivial way to get the indent out
     indent_str = token.rsplit('\n', 1)[1]
-    indent_level = _get_indent_level(indent_str)
+    if detect_deeper_indentation:
+        level_count, indent_levels = _split_by_indent_level(indent_str)
+    elif pending_embed:
+        level_count, indent_levels = _split_by_indent_level(
+            indent_str, max_level=clc_lex_state.indent_level + 1)
+    else:
+        level_count, indent_levels = _split_by_indent_level(
+            indent_str, max_level=clc_lex_state.indent_level)
+    level_index = level_count - 1
 
-    # If we're inside an embed, we need to ignore deeper indentation.
-    if not clc_lex_state.within_embed:
-        # TODO: we need to recover any extra indentation from the embed here.
-        # We'll currently discard it here, which means we'll break eg. python.
-
-        while indent_level > clc_lex_state.indent_level:
-            clc_lex_state.indent_level += 1
-            yield Token.new_borrow_pos(TERMINAL_BLOCK_BEGIN, indent_str, token)
-
-    while indent_level < clc_lex_state.indent_level:
+    while level_index < clc_lex_state.indent_level:
         yield Token.new_borrow_pos(TERMINAL_BLOCK_END, indent_str, token)
         # Note that this is level-triggered instead of edge-triggered -- in
         # other words, we'll just repeatedly set this when dropping out of the
         # indent level. It's equivalent and makes the logic cleaner.
         clc_lex_state.within_embed = False
         clc_lex_state.indent_level -= 1
+        recover_indent = False
+
+        # Note: we're not setting within_comment to false here, because
+        # de-indenting within a comment is just a syntax error, end of story
+
+    if detect_deeper_indentation:
+        while level_index > clc_lex_state.indent_level:
+            clc_lex_state.indent_level += 1
+            clc_lex_state.pending_embed = False
+            yield Token.new_borrow_pos(TERMINAL_BLOCK_BEGIN, indent_str, token)
+
+            # Note that if we were waiting for an embed to start, then this
+            # terminal also contains the initial indentation for the first line
+            # of the embed block, and we need to recover it
+            if pending_embed:
+                recover_indent = True
+
+    # Note that we need to re-check this because we might be entering or
+    # leaving an embedded block
+    if recover_indent:
+        # This shouldn't be possible, but hey, just in case...
+        if len(indent_levels) < level_count:
+            print('Impossible branch!')
+            recovered_indentation = ''
+        else:
+            recovered_indentation = indent_levels[-1]
+        yield Token.new_borrow_pos(
+            TERMINAL_RECOVERED_INDENT, recovered_indentation, token)
 
 
 @_token_dispatch(TERMINAL_NL_THEN_EMPTY)
@@ -314,6 +362,16 @@ def _process_comment_end(clc_lex_state, token):
     clc_lex_state.within_comment = False
 
 
+@_token_dispatch(TERMINAL_PENDING_EMBED)
+def _process_pending_embed(clc_lex_state, token):
+    """Marks us as waiting on an embed line. This allows the
+    newline-then-indentation processor to include the recovered
+    indentation for the first line of the embed block.
+    """
+    clc_lex_state.pending_embed = True
+    yield token
+
+
 @_token_dispatch(TERMINAL_EMBED_LINE)
 def _process_embed_line(clc_lex_state, token):
     """Disables indent detection within embedded lines. Note that this
@@ -336,6 +394,9 @@ class _ShimShamPostlex(PostLex):
         yield from stream
 
 
+# TODO: we should rewrite this so that the actual transformer class is
+# metaprogrammed, and the individual handlers are done via decorators. (and we
+# should move this into a dedicated module!)
 class CstTransformer(Transformer):
     """This class transforms a lark parse tree into a cleancopy CST.
     Note that these need to match the grammar EXACTLY, including the
@@ -423,12 +484,10 @@ class CstTransformer(Transformer):
         comment_lines = []
 
         for parse_tree_child in value:
-            if isinstance(parse_tree_child, Token):
-                if parse_tree_child.type == TERMINAL_EMBED_LINE:
-                    embed_lines.append(EmbedLine(text=parse_tree_child.value))
-                elif parse_tree_child.type == TERMINAL_EMPTY_LINE:
-                    embed_lines.append(EmptyLine())
-
+            if isinstance(parse_tree_child, EmbedLine):
+                embed_lines.append(parse_tree_child)
+            elif isinstance(parse_tree_child, EmptyLine):
+                embed_lines.append(parse_tree_child)
             elif isinstance(parse_tree_child, _PendingNodeMetadataContainer):
                 metadata_lines.extend(parse_tree_child.metadata_lines)
                 comment_lines.extend(parse_tree_child.comment_lines)
@@ -485,11 +544,50 @@ class CstTransformer(Transformer):
         token_line, __ = value
         return ContentLine(text=token_line.value)
 
+    def node_line_embed(self, value):
+        is_empty = None
+        recovered_indentation = None
+        embed_line_wrapper = None
+
+        for child_token in value:
+            if child_token.type == TERMINAL_EMBED_LINE:
+                is_empty = False
+                embed_line_wrapper = child_token.value
+            elif child_token.type == TERMINAL_RECOVERED_INDENT:
+                # Note that this also extracts the value from the token wrapper
+                recovered_indentation = child_token.value.value
+            elif child_token.type == TERMINAL_EMPTY_LINE:
+                is_empty = True
+
+        if is_empty:
+            return EmptyLine()
+
+        else:
+            text_wrapper = _TokenValueWrapper(
+                value=recovered_indentation + embed_line_wrapper.value,
+                indent_level=embed_line_wrapper.indent_level)
+            return EmbedLine(text=text_wrapper)
+
     def comment_lines(self, value):
         comment_lines = []
+        previous_token_indent = None
         for token in value:
             if token.type == TERMINAL_COMMENT_LINE:
-                comment_lines.append(CommentLine(text=token.value))
+                if previous_token_indent is None:
+                    comment_text_wrapper = token.value
+                else:
+                    old_wrapper = token.value
+                    comment_text_wrapper = _TokenValueWrapper(
+                        value=previous_token_indent + old_wrapper.value,
+                        indent_level=old_wrapper.indent_level)
+                    previous_token_indent = None
+
+                comment_lines.append(CommentLine(text=comment_text_wrapper))
+
+            elif token.type == TERMINAL_RECOVERED_INDENT:
+                # Note that this also extracts the value from the token wrapper
+                previous_token_indent = token.value.value
+
         return _CommentLinesContainer(comment_lines=comment_lines)
 
 
@@ -523,16 +621,72 @@ class _NodeAnchorContainer:
     content_lines: list
 
 
-def _get_indent_level(indentation: str):
-    tab_count = indentation.count('\t')
-    total_whitespace_count = len(indentation)
-    spacelike_count = total_whitespace_count - tab_count
+def _split_by_indent_level(indentation: str, max_level: Optional[int] = inf):
+    """This will split an indentation string into substring(s), one for
+    each indent level encountered. It also checks for both partial
+    indentation, as well as mixed tabs/spaces within a particular
+    indentation level. It returns a tuple: (level_count, [levels]).
 
-    if spacelike_count % INDENT_DEPTH:
-        raise IndentationError('Partial indentation is invalid!')
+    If max_level is given, then it will stop splitting AFTER the
+    max_level, leaving the remaining whitespace untouched (as the last
+    item in the split). Be sure to check against the level_count here;
+    you might be de-indenting, and we DON'T raise in that case!
+    """
+    level_start_indices = [0]
+    char_count = len(indentation)
+    current_level = 1
+    cursor = 0
 
-    spacelike_indent_level = spacelike_count // INDENT_DEPTH
-    return spacelike_indent_level + tab_count
+    # First we figure out what substrings *should* correspond to given levels
+    while cursor < char_count and current_level <= max_level:
+        if indentation[cursor] == '\t':
+            cursor += 1
+        else:
+            cursor += INDENT_DEPTH
+
+        level_start_indices.append(cursor)
+        current_level += 1
+    # Just for clarity: this is no longer the current level, because it just
+    # failed the while condition. So this is now the previous current level
+    # plus one, which is the same as the level count.
+    level_count = current_level
+
+    # Next, we create the actual substrings, and make sure they don't mix
+    # tabs and spaces internally. Note that the zeroth indentation level is
+    # always the empty string!
+    indentation_levels = ['']
+    # Note: we need this here so that the level_end binding from the for loop
+    # gets the function scope instead of the loop scope
+    level_end = 0
+    for level_start, level_end in itertools.pairwise(level_start_indices):
+        # This must be a tab character; we don't need to do an expensive string
+        # operation to get it back
+        if level_end - level_start == 1:
+            indentation_levels.append('\t')
+        else:
+            substring = indentation[level_start: level_end]
+            if '\t' in substring:
+                raise IndentationError(
+                    'Cannot mix tabs and spaces within a single indent level!')
+            indentation_levels.append(substring)
+
+    # Don't forget that pairwise will only use the last level_start as the
+    # endpoint for the second-to-last indentation level!
+    last_substring = indentation[level_end:]
+    indentation_levels.append(last_substring)
+
+    # Finally, we do some other checks on the last indentation segment, but
+    # only if we were asked to split the whole indentation string.
+    if max_level is inf:
+        # This would indicate that the deepest indentation level is incomplete.
+        # We don't need to bother getting a substring for it.
+        if cursor != char_count:
+            raise IndentationError('Partial indentation is invalid!')
+        if len(last_substring) > 1 and '\t' in last_substring:
+            raise IndentationError(
+                'Cannot mix tabs and spaces within a single indent level!')
+
+    return level_count, indentation_levels
 
 
 def test():
@@ -546,11 +700,6 @@ def test():
     for filename in testvectors:
         print(f'#################### {filename} ####################')
         test_doc = (testvector_dir / filename).read_text()
-        try:
-            parse_result = parse(test_doc)
-        except Exception as exc:
-            print(f'Failed parse on {exc.char!r}')
-            raise
-        parse_results.append(parse_result)
+        parse_results.append(parse(test_doc))
 
     return parse_results
