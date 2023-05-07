@@ -27,11 +27,17 @@ class DocumentNode(CSTNode):
     title_lines: Any
     metadata_lines: Any
     content_lines: Any
+    embed_lines: Any
     # TODO: this is currently just used by metadata_lines for comments that
     # show up within the metadata itself. Instead, they should be moved into
     # metadata_lines, and put in order as they appear within the metadata
     # lines.
     comment_lines: Any
+
+    def __post_init__(self, *args, **kwargs):
+        if self.content_lines is not None and self.embed_lines is not None:
+            raise TypeError(
+                'A node can have only content lines XOR embed lines!')
 
     def prettify(self):
         all_lines = []
@@ -49,6 +55,9 @@ class DocumentNode(CSTNode):
                     all_lines.append(textwrap.indent(nested_lines, '    '))
                 else:
                     all_lines.append(textwrap.indent(str(line), '    '))
+        if self.embed_lines is not None:
+            for line in self.embed_lines:
+                all_lines.append(textwrap.indent(str(line), '    '))
         if self.comment_lines is not None:
             for line in self.comment_lines:
                 all_lines.append(textwrap.indent(str(line), '    '))
@@ -81,6 +90,11 @@ class ContentLine(CSTNode):
 
 
 @dataclass(kw_only=True)
+class EmbedLine(CSTNode):
+    text: str
+
+
+@dataclass(kw_only=True)
 class CleancopyDocument:
     version_comment: VersionComment
     document_root: DocumentNode
@@ -97,4 +111,9 @@ class PendingNodeTitleLine(CSTNode):
 @dataclass(kw_only=True)
 class PendingNodeMetadataLine(CSTNode):
     key: str
+    value: str
+
+
+@dataclass(kw_only=True)
+class PendingNodeEmbedTypeAssignmentLine(CSTNode):
     value: str

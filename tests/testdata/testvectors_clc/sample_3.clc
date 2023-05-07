@@ -1,0 +1,31 @@
+> In a nutshell, if you want special behavior, declare a node type
+foo: 'bar'
+embed: 'code/deadfish'
+baz: 'zoop'
+    iiisdsiiiiiiiioiiiiiiiiiiiiiiiiiiiiiiiiiiiiioiiiiiiiooiiio
+    dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddoddddddddddddo
+    dddddddddddddddddddddsddoddddddddoiiioddddddoddddddddo
+    dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddo
+
+That being said, "partially" understanding a type might be perfectly reasonable.
+For example, most text display these days has an understanding of "code", so
+it would be able to interpret the above as code, even if it didn't have a
+syntax file for deadfish.
+
+> Billable hours
+foo: 12.34
+embed: 'data/json'
+baz: null
+    {
+        "monday": 8,
+        "tuesday": 8,
+        "wednesday": 8
+    }
+
+> Code blocks are nodes, too
+embed: 'code/python'
+    if True:
+        print('hello, world?')
+
+    if False:
+        print('I guess nobody answered')

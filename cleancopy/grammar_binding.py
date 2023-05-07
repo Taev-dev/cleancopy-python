@@ -21,7 +21,9 @@ from cleancopy.cst_nodes import CleancopyDocument
 from cleancopy.cst_nodes import CommentLine
 from cleancopy.cst_nodes import ContentLine
 from cleancopy.cst_nodes import DocumentNode
+from cleancopy.cst_nodes import EmbedLine
 from cleancopy.cst_nodes import EmptyLine
+from cleancopy.cst_nodes import PendingNodeEmbedTypeAssignmentLine
 from cleancopy.cst_nodes import PendingNodeMetadataLine
 from cleancopy.cst_nodes import PendingNodeTitleLine
 from cleancopy.cst_nodes import VersionComment
@@ -44,6 +46,7 @@ TERMINAL_BLOCK_END = '_BLOCK_END'
 TERMINAL_COMMENT_BEGIN = 'SYMBOL_COMMENT_BEGIN'
 TERMINAL_COMMENT_END = 'SYMBOL_COMMENT_END'
 TERMINAL_COMMENT_LINE = 'TEXT_COMMENT_LINE'
+TERMINAL_EMBED_LINE = 'TEXT_EMBED_LINE'
 
 _PENDING_NODE_IS_EMPTY = object()
 
@@ -181,7 +184,7 @@ class CleancopyLexer(Lexer):
         and mostly is just responsible for error handling and logging.
         """
         clc_lex_state = _CleancopyLexState(
-            indent_level=0, within_comment=False)
+            indent_level=0, within_comment=False, within_embed=False)
 
         try:
             for next_token in self._do_lex(
@@ -241,6 +244,7 @@ class _TokenValueWrapper:
 class _CleancopyLexState:
     indent_level: int
     within_comment: bool
+    within_embed: bool
     # Set after the first token! Note that this is slightly different than the
     # lark last token, because we modify the tokens being produced during
     # lexing. So these are the tokens we **return** to the parser.
@@ -262,13 +266,22 @@ def _process_nl_then_indentation(clc_lex_state, token):
     indent_str = token.rsplit('\n', 1)[1]
     indent_level = _get_indent_level(indent_str)
 
-    while indent_level > clc_lex_state.indent_level:
-        clc_lex_state.indent_level += 1
-        yield Token.new_borrow_pos(TERMINAL_BLOCK_BEGIN, indent_str, token)
+    # If we're inside an embed, we need to ignore deeper indentation.
+    if not clc_lex_state.within_embed:
+        # TODO: we need to recover any extra indentation from the embed here.
+        # We'll currently discard it here, which means we'll break eg. python.
+
+        while indent_level > clc_lex_state.indent_level:
+            clc_lex_state.indent_level += 1
+            yield Token.new_borrow_pos(TERMINAL_BLOCK_BEGIN, indent_str, token)
 
     while indent_level < clc_lex_state.indent_level:
-        clc_lex_state.indent_level -= 1
         yield Token.new_borrow_pos(TERMINAL_BLOCK_END, indent_str, token)
+        # Note that this is level-triggered instead of edge-triggered -- in
+        # other words, we'll just repeatedly set this when dropping out of the
+        # indent level. It's equivalent and makes the logic cleaner.
+        clc_lex_state.within_embed = False
+        clc_lex_state.indent_level -= 1
 
 
 @_token_dispatch(TERMINAL_NL_THEN_EMPTY)
@@ -297,7 +310,17 @@ def _process_comment_end(clc_lex_state, token):
     """Resumes normal indentation processing at the end of a comment
     block.
     """
+    yield token
     clc_lex_state.within_comment = False
+
+
+@_token_dispatch(TERMINAL_EMBED_LINE)
+def _process_embed_line(clc_lex_state, token):
+    """Disables indent detection within embedded lines. Note that this
+    is a bit of the hack; it's a level-detect instead of an edge-detect
+    (ie, we re-run this for every embed line).
+    """
+    clc_lex_state.within_embed = True
     yield token
 
 
@@ -317,24 +340,25 @@ class CstTransformer(Transformer):
     """This class transforms a lark parse tree into a cleancopy CST.
     Note that these need to match the grammar EXACTLY, including the
     places where _EOLs are defined.
-    """
 
-    def version_comment(self, value):
-        return VersionComment(version=value)
+    Note: keep the method order the same as the definitions in the
+    grammar itself, so it's easy to compare them side-by-side.
+    """
 
     def document(self, value):
         version_comment, __, root_node_container = value
         root_node = DocumentNode(
             title_lines=None,
             content_lines=root_node_container.content_lines,
+            embed_lines=None,
             metadata_lines=None,
             comment_lines=None)
         return CleancopyDocument(
             version_comment=version_comment,
             document_root=root_node)
 
-    # Starting here, we're adding in some better organization
-    #################################
+    def version_comment(self, value):
+        return VersionComment(version=value)
 
     def node_anchor(self, value):
         content_lines = []
@@ -344,49 +368,73 @@ class CstTransformer(Transformer):
                 content_lines.extend(line_or_container.comment_lines)
             else:
                 content_lines.append(line_or_container)
-        # Note that the type of this needs to match up with the if/elif inside
-        # pending_node_content
-        return _PendingNodeContentContainer(content_lines=content_lines)
+
+        return _NodeAnchorContainer(content_lines=content_lines)
 
     def pending_node_anchor(self, value):
-        return value[0]
-
-    def pending_node_empty(self, value):
         title_lines = []
-        metadata_lines = []
-        comment_lines = []
+        pending_node_embed = None
+        pending_node_content = None
+        metadata_lines = None
+        # TODO: this needs to be folded into the metadata lines
+        comment_lines = None
 
-        for parse_tree_child in value:
-            if isinstance(parse_tree_child, _PendingNodeMetadataContainer):
-                metadata_lines.extend(parse_tree_child.metadata_lines)
-                comment_lines.extend(parse_tree_child.comment_lines)
-            elif isinstance(parse_tree_child, PendingNodeTitleLine):
-                title_lines.append(parse_tree_child)
+        for title_or_node in value:
+            if isinstance(title_or_node, PendingNodeTitleLine):
+                title_lines.append(title_or_node)
+
+            elif isinstance(title_or_node, _PendingNodeContentContainer):
+                pending_node_content = title_or_node.content_lines
+                metadata_lines = title_or_node.metadata_lines
+                comment_lines = title_or_node.comment_lines
+
+            elif isinstance(title_or_node, _PendingNodeEmbedContainer):
+                pending_node_embed = title_or_node.embed_lines
+                metadata_lines = title_or_node.metadata_lines
+                comment_lines = title_or_node.comment_lines
 
         return DocumentNode(
             title_lines=title_lines,
-            content_lines=None,
-            metadata_lines=metadata_lines,
-            comment_lines=comment_lines)
+            content_lines=pending_node_content,
+            embed_lines=pending_node_embed,
+            comment_lines=comment_lines,
+            metadata_lines=metadata_lines)
 
     def pending_node_content(self, value):
-        title_lines = []
         content_lines = []
         metadata_lines = []
         comment_lines = []
 
         for parse_tree_child in value:
-            if isinstance(parse_tree_child, _PendingNodeContentContainer):
+            if isinstance(parse_tree_child, _NodeAnchorContainer):
                 content_lines.extend(parse_tree_child.content_lines)
             elif isinstance(parse_tree_child, _PendingNodeMetadataContainer):
                 metadata_lines.extend(parse_tree_child.metadata_lines)
                 comment_lines.extend(parse_tree_child.comment_lines)
-            elif isinstance(parse_tree_child, PendingNodeTitleLine):
-                title_lines.append(parse_tree_child)
 
-        return DocumentNode(
-            title_lines=title_lines,
+        return _PendingNodeContentContainer(
             content_lines=content_lines,
+            metadata_lines=metadata_lines,
+            comment_lines=comment_lines)
+
+    def pending_node_embed(self, value):
+        embed_lines = []
+        metadata_lines = []
+        comment_lines = []
+
+        for parse_tree_child in value:
+            if isinstance(parse_tree_child, Token):
+                if parse_tree_child.type == TERMINAL_EMBED_LINE:
+                    embed_lines.append(EmbedLine(text=parse_tree_child.value))
+                elif parse_tree_child.type == TERMINAL_EMPTY_LINE:
+                    embed_lines.append(EmptyLine())
+
+            elif isinstance(parse_tree_child, _PendingNodeMetadataContainer):
+                metadata_lines.extend(parse_tree_child.metadata_lines)
+                comment_lines.extend(parse_tree_child.comment_lines)
+
+        return _PendingNodeEmbedContainer(
+            embed_lines=embed_lines,
             metadata_lines=metadata_lines,
             comment_lines=comment_lines)
 
@@ -414,6 +462,11 @@ class CstTransformer(Transformer):
         return PendingNodeMetadataLine(
             key=token_key.value,
             value=token_value.value)
+
+    def node_line_pending_node_embed_assignment(self, value):
+        __, __, embed_type_assignment, __ = value
+        return PendingNodeEmbedTypeAssignmentLine(
+            value=embed_type_assignment.value)
 
     def node_line_empty(self, value):
         # empty_line, EOL
@@ -454,6 +507,20 @@ class _PendingNodeMetadataContainer:
 @dataclass
 class _PendingNodeContentContainer:
     content_lines: list
+    metadata_lines: list
+    comment_lines: list
+
+
+@dataclass
+class _PendingNodeEmbedContainer:
+    embed_lines: list
+    metadata_lines: list
+    comment_lines: list
+
+
+@dataclass
+class _NodeAnchorContainer:
+    content_lines: list
 
 
 def _get_indent_level(indentation: str):
@@ -471,8 +538,19 @@ def _get_indent_level(indentation: str):
 def test():
     from pathlib import Path
     from cleancopy.grammar_binding import parse
-    test_path_1 = Path('./tests/testdata/testvectors_clc/sample_1.clc')
-    test_doc_1 = test_path_1.read_text()
-    test_path_2 = Path('./tests/testdata/testvectors_clc/sample_2.clc')
-    test_doc_2 = test_path_2.read_text()
-    return parse(test_doc_1), parse(test_doc_2)
+
+    testvector_dir = Path('./tests/testdata/testvectors_clc')
+    testvectors = ['sample_1.clc', 'sample_2.clc', 'sample_3.clc']
+
+    parse_results = []
+    for filename in testvectors:
+        print(f'#################### {filename} ####################')
+        test_doc = (testvector_dir / filename).read_text()
+        try:
+            parse_result = parse(test_doc)
+        except Exception as exc:
+            print(f'Failed parse on {exc.char!r}')
+            raise
+        parse_results.append(parse_result)
+
+    return parse_results

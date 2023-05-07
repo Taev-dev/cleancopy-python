@@ -2,7 +2,10 @@
 id: 'the_first_section'
 summary: 'Comments. Do you speak them?'
     <<<Note that comments are supported. An optional top-of-file comment as
-    above can be used if you want a way to detect syntax simply.>>>
+    above can be used if you want a way to detect syntax simply.
+        Also note that comments ignore indentation!
+    Or at least, they allow DEEPER indentation; I think probably lesser
+    indentation should still be caught and considered an error.>>>
 
     Also note that escape sequences take precedence over comments. So if you
     want to have a literal ``(((>>>)))`` sequence, you can just put it in
