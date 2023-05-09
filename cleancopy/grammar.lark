@@ -12,8 +12,14 @@ pending_node_metadata_block: (node_line_pending_node_metadata | comment_lines)+
 
 node_line_pending_node_empty: SYMBOL_NODE_EMPTY _EOL
 node_line_pending_node_title: SYMBOL_NODE_DEF [TEXT_NODE_TITLE] _EOL
-node_line_pending_node_metadata: TEXT_METADATA_KEY SYMBOL_METADATA_ASSIGNMENT TEXT_METADATA_VALUE _EOL
-node_line_pending_node_embed_assignment: TEXT_METADATA_KEY_EMBED SYMBOL_METADATA_ASSIGNMENT TEXT_METADATA_VALUE _EOL
+node_line_pending_node_metadata: METADATA_KEY SYMBOL_METADATA_ASSIGNMENT metadata_value _EOL
+node_line_pending_node_embed_assignment: METADATA_KEY_EMBED SYMBOL_METADATA_ASSIGNMENT METADATA_VALUE_STR _EOL
+
+metadata_value: METADATA_VALUE_STR
+              | METADATA_VALUE_NULL
+              | METADATA_VALUE_TRUE
+              | METADATA_VALUE_FALSE
+              | METADATA_VALUE_NUMERIC
 
 node_line_empty: _EMPTY_LINE _EOL
 node_line_content: TEXT_CONTENT_LINE _EOL
@@ -30,14 +36,20 @@ SYMBOL_NODE_DEF: />(?!>>)[^\S\r\n]*/
 SYMBOL_NODE_EMPTY: /<(?!<<)[^\S\r\n]*/
 SYMBOL_METADATA_ASSIGNMENT: /:[^\S\r\n]*/
 TEXT_NODE_TITLE: /[^\r\n]+/
-TEXT_METADATA_KEY: /(?!embed:)[A-z_][A-z0-9_\-]*/
-TEXT_METADATA_KEY_EMBED: /embed(?=:)/
 TEXT_COMMENT_LINE.1: /((?!>>>)[^\r\n])+/
 TEXT_EMBED_LINE.2: /[^\r\n]+/
-// These are temporary, just so that we can make small incremental progress
+// This is temporary, just so that we can make small incremental progress
 // without needing to implement the entire world
-TEXT_METADATA_VALUE: /[^\r\n]+/
 TEXT_CONTENT_LINE: /(?!<<<)[^\r\n]+/
+
+
+METADATA_KEY: /(?!embed:)[A-z_][A-z0-9_\-]*/
+METADATA_KEY_EMBED: /embed(?=:)/
+METADATA_VALUE_STR: /"(?!"")[^\r\n]*?(?<!\\)(\\\\)*?"|'(?!'')[^\r\n]*?(?<!\\)(\\\\)*?'/
+METADATA_VALUE_NULL: "null"
+METADATA_VALUE_TRUE: "true"
+METADATA_VALUE_FALSE: "false"
+%import common.SIGNED_NUMBER -> METADATA_VALUE_NUMERIC
 
 // These terminals are used only by the lexer, in order to derive the ones
 // in the declare block

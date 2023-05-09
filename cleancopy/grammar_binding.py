@@ -4,6 +4,7 @@ third-party parser generator library we decide to use.
 import itertools
 from copy import copy
 from dataclasses import dataclass
+from decimal import Decimal
 from math import inf
 from pathlib import Path
 from typing import Any
@@ -31,6 +32,7 @@ from cleancopy.cst_nodes import PendingNodeMetadataLine
 from cleancopy.cst_nodes import PendingNodeTitleLine
 from cleancopy.cst_nodes import VersionComment
 from cleancopy.exceptions import IndentationError
+from cleancopy.exceptions import InvalidMetadataValue
 
 _grammar_path = Path(__file__).parent / 'grammar.lark'
 _grammar_builder = GrammarBuilder(global_keep_all_tokens=True)
@@ -51,7 +53,12 @@ TERMINAL_COMMENT_END = 'SYMBOL_COMMENT_END'
 TERMINAL_COMMENT_LINE = 'TEXT_COMMENT_LINE'
 TERMINAL_EMBED_LINE = 'TEXT_EMBED_LINE'
 TERMINAL_RECOVERED_INDENT = '_RECOVERED_INDENTATION'
-TERMINAL_PENDING_EMBED = 'TEXT_METADATA_KEY_EMBED'
+TERMINAL_PENDING_EMBED = 'METADATA_KEY_EMBED'
+TERMINAL_METADATA_STR = 'METADATA_VALUE_STR'
+TERMINAL_METADATA_NULL = 'METADATA_VALUE_NULL'
+TERMINAL_METADATA_TRUE = 'METADATA_VALUE_TRUE'
+TERMINAL_METADATA_FALSE = 'METADATA_VALUE_FALSE'
+TERMINAL_METADATA_NUMERIC = 'METADATA_VALUE_NUMERIC'
 
 _PENDING_NODE_IS_EMPTY = object()
 
@@ -82,6 +89,19 @@ def _token_dispatch(terminal_name):
 
 
 _token_dispatch.registry = {}
+
+
+def _metadata_value_parser(terminal_name):
+    """Use this decorator to mark something as a parser for that
+    particular terminal.
+    """
+    def decorator(func):
+        _metadata_value_parser.registry[terminal_name] = func
+        return func
+    return decorator
+
+
+_metadata_value_parser.registry = {}
 
 
 def _get_parent_terminals(terminal_name):
@@ -382,6 +402,32 @@ def _process_embed_line(clc_lex_state, token):
     yield token
 
 
+@_metadata_value_parser(TERMINAL_METADATA_STR)
+def _process_metadata_string(token):
+    # Strip the quotes and keep the rest
+    return token.value.value[1: -1]
+
+
+@_metadata_value_parser(TERMINAL_METADATA_NULL)
+def _process_metadata_null(token):
+    return None
+
+
+@_metadata_value_parser(TERMINAL_METADATA_TRUE)
+def _process_metadata_true(token):
+    return True
+
+
+@_metadata_value_parser(TERMINAL_METADATA_FALSE)
+def _process_metadata_false(token):
+    return False
+
+
+@_metadata_value_parser(TERMINAL_METADATA_NUMERIC)
+def _process_metadata_numeric(token):
+    return Decimal(token.value.value)
+
+
 class _ShimShamPostlex(PostLex):
     """This is a shim class. The ONLY purpose it serves is to pass in
     the always_accept parameter, because that's the only way we have to
@@ -483,14 +529,16 @@ class CstTransformer(Transformer):
         metadata_lines = []
         comment_lines = []
 
-        for parse_tree_child in value:
-            if isinstance(parse_tree_child, EmbedLine):
-                embed_lines.append(parse_tree_child)
-            elif isinstance(parse_tree_child, EmptyLine):
-                embed_lines.append(parse_tree_child)
-            elif isinstance(parse_tree_child, _PendingNodeMetadataContainer):
-                metadata_lines.extend(parse_tree_child.metadata_lines)
-                comment_lines.extend(parse_tree_child.comment_lines)
+        for tree_child in value:
+            if isinstance(tree_child, PendingNodeEmbedTypeAssignmentLine):
+                metadata_lines.append(tree_child)
+            elif isinstance(tree_child, EmbedLine):
+                embed_lines.append(tree_child)
+            elif isinstance(tree_child, EmptyLine):
+                embed_lines.append(tree_child)
+            elif isinstance(tree_child, _PendingNodeMetadataContainer):
+                metadata_lines.extend(tree_child.metadata_lines)
+                comment_lines.extend(tree_child.comment_lines)
 
         return _PendingNodeEmbedContainer(
             embed_lines=embed_lines,
@@ -517,15 +565,35 @@ class CstTransformer(Transformer):
         return PendingNodeTitleLine(text=str(title_text))
 
     def node_line_pending_node_metadata(self, value):
-        token_key, __, token_value, __ = value
+        token_key, __, metadata_value, __ = value
         return PendingNodeMetadataLine(
             key=token_key.value,
-            value=token_value.value)
+            value=metadata_value)
 
     def node_line_pending_node_embed_assignment(self, value):
         __, __, embed_type_assignment, __ = value
+        # Note that we're stripping out the quotes for the string here
         return PendingNodeEmbedTypeAssignmentLine(
-            value=embed_type_assignment.value)
+            value=embed_type_assignment.value.value[1: -1])
+
+    def metadata_value(self, value):
+        # This is awkward, but expedient. It's not convenient to expand this
+        # within the grammar for two reasons: first, one of our terminals is
+        # imported, and second, we use METADATA_VALUE_STR directly within the
+        # embed type declaration
+        token, = value
+        try:
+            typecaster = _metadata_value_parser.registry[token.type]
+        except KeyError as exc:
+            raise InvalidMetadataValue(
+                'Invalid token type for metadata value!') from exc
+
+        try:
+            return typecaster(token)
+        except (ValueError, TypeError) as exc:
+            raise InvalidMetadataValue(
+                'Text could not be parsed into a valid metadata value!'
+            ) from exc
 
     def node_line_empty(self, value):
         # empty_line, EOL
