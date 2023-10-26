@@ -9,7 +9,7 @@ summary: 'Comments. Do you speak them?'
 
     Also note that escape sequences take precedence over comments. So if you
     want to have a literal ``(((>>>)))`` sequence, you can just put it in
-    triple parentheses like this: ``[[[(((>>>)))]]]``
+    triple parentheses like this: ``[[[(((<<<)))]]]``
 
 
 Any node with a type declaration is treated as not-clean-copy. Applications

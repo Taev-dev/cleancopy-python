@@ -1,0 +1,14 @@
+> Inline formatting is legit
+
+    You can, of course, also have inline formatting -- just like markdown. So,
+    **bolding** things is fine. Or //italics//. Or ~~strikethroughs~~. Or
+    ``monospace``. Or even __underlines__!
+
+    Also, check this out: formatting //can be **nested** and even works across
+    line breaks!//
+
+    A note on things like getting creative with "blanks": though this might
+    actually be better served by inline metadata, you can actually implement
+    this with underscores, it's just awkward, because you have to use escape
+    sequences, like this: "when I (((_____))), help me (((_____))), so I can
+    (((_____)))."
