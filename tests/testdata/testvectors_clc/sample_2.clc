@@ -1,18 +1,18 @@
 > A note on comments
 id: 'the_first_section'
 summary: 'Comments. Do you speak them?'
-    <<<Note that comments are supported. An optional top-of-file comment as
-    above can be used if you want a way to detect syntax simply.
-        Also note that comments ignore indentation!
-    Or at least, they allow DEEPER indentation; I think probably lesser
-    indentation should still be caught and considered an error.>>>
+    ## Note that annotation (comment) lines are supported. They are included
+    ## in both the AST **and** the CST. They **must** consume the entire line;
+    ## you cannot have a partial-line comment.
+    ## Also note that comments must be placed at the correct indentation level
+    ## for the node!
 
     Also note that escape sequences take precedence over comments. So if you
-    want to have a literal ``(((>>>)))`` sequence, you can just put it in
-    triple parentheses like this: ``[[[(((<<<)))]]]``
+    want to have a literal ``##`` sequence at the beginning of a line, you
+    can simply escape it: ``||##||``
 
 
-Any node with a type declaration is treated as not-clean-copy. Applications
+Any node with an embed declaration is treated as not-clean-copy. Applications
 that understand that type should process it accordingly, but any applications
 that don't understand the type should treat it as block raw text, similar to
 a generic code block.

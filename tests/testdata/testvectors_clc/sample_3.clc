@@ -1,6 +1,6 @@
 > In a nutshell, if you want special behavior, declare a node type
 foo: 'bar'
-embed: 'code/deadfish'
+__embed__: 'code/deadfish'
 baz: 'zoop'
     iiisdsiiiiiiiioiiiiiiiiiiiiiiiiiiiiiiiiiiiiioiiiiiiiooiiio
     dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddoddddddddddddo
@@ -14,7 +14,7 @@ syntax file for deadfish.
 
 > Billable hours
 foo: 12.34
-embed: 'data/json'
+__embed__: 'data/json'
 baz: null
     {
         "monday": 8,
@@ -23,7 +23,7 @@ baz: null
     }
 
 > Code blocks are nodes, too
-embed: 'code/python'
+__embed__: 'code/python'
     if True:
         print('hello, world?')
 

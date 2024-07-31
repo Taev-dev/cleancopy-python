@@ -1,10 +1,10 @@
-<<<cleancopy>>>
+## cleancopy
 > The title of the meta/document tag can be used as the document title
 > if desired
-type: 'meta/document'
-id: 'some_document_id'
+__doc_meta__: true
+__id__: 'some_document_id'
 summary: 'An example'
-<<<Note: a single inverse node marker like this denotes an empty node. These
-are useful for metadata blocks with no content -- or, for example, to define
-an include that a post-processor can use for reusable blocks.>>>
+## Note: a single inverse node marker like this denotes an empty node. These
+## are useful for metadata blocks with no content -- or, for example, to define
+## an include that a post-processor can use for reusable blocks.
 <

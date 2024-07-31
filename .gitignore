@@ -132,3 +132,4 @@ yarn-error.log
 /__sapper__/
 .npmrc
 _prompt/
+.pdm-python

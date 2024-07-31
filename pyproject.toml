@@ -1,32 +1,48 @@
-[build-system]
-requires = ["poetry-core>=1.0.0"]
-build-backend = "poetry.core.masonry.api"
-
-[tool.poetry]
+[project]
 name = "cleancopy"
-version = "0.0.0"
-description = "Python bindings for the cleancopy lightweight markup language"
+description = "Python parser for the cleancopy lightweight markup language"
 authors = []
+dynamic = ["version"]
+requires-python = ">=3.12.0"
+# TODO: somehow cleancopy-ify this? Not sure how to get that to play nicely with
+# github, maybe "compile" to .md/.rst?
+readme = "README.md"
 
-[tool.poetry.dependencies]
-python = "^3.11"
-lark = "^1.1.5"
+dependencies = [
+    "tree-sitter >= 0.22.3",
+    "tree-sitter-cleancopy >= 0.0.18"
+]
 
-[tool.poetry.dev-dependencies]
-pytest = "^7.2.1"
-ipython = "^8.8.0"
-ruff = "^0.0.221"
-refurb = "^1.10.0"
+[tool.pdm.version]
+source = "scm"
+
+[tool.pdm.dev-dependencies]
+test = [
+    "pytest >= 8.1.1"
+]
+
+lint = [
+    "ruff >= 0.3.3",
+    "refurb >= 2.0.0"
+]
+
+repl = [
+    "ipython >= 8.8.0"
+]
+
 
 [tool.pytest.ini_options]
 minversion = "7.0"
 testpaths = [
     "tests/unittests",
+    "tests/integration_tests",
+    "tests/utils/tests"
 ]
 addopts = "--import-mode=importlib"
+cache_dir = '/tmp/pytest_cache'
 
 [tool.ruff]
-dummy-variable-rgx = "^__$"
+dummy-variable-rgx = "^_{0,1}$"
 line-length = 79
 select = [
     "F",
@@ -48,12 +64,27 @@ select = [
     "PLW",
     "RUF"
 ]
+ignore = [
+    "N818",
+    "PLR5501"
+]
 
-[tool.ruff.isort]
+[tool.ruff.lint.isort]
 force-single-line = true
+
+[tool.ruff.per-file-ignores]
+"tests/**" = ["S101", "PLR2004"]
 
 [tool.refurb]
 ignore = []
+
+[tool.pyright]
+# See https://github.com/microsoft/pyright/blob/main/docs/configuration.md
+pythonVersion = "3.12"
+pythonPlatform = "Linux"
+# Not sure how to get import resolution to work for 3rdparty packages. See
+# https://github.com/microsoft/pyright/blob/main/docs/import-resolution.md
+# Might require remote language server from within docker
 
 [tool.coverage.run]
 source = ["cleancopy/"]

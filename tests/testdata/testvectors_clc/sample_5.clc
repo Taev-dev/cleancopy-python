@@ -1,0 +1,130 @@
+> "Installing" for development
+__embed__: 'code/shell'
+    mklink /D "C:\Users\Niklas\AppData\Roaming\Sublime Text\Packages\cleancopy" "D:\Dropbox\Projekte\taev\cleancopy\cleancopy-sublime"
+
+> Updating tree sitter grammar for python binding
+
+    This is pretty simple, just a simple order to get through:
+    1.. make your changes
+    2.. re-generate tree sitter grammar
+        ``npx tree-sitter generate``
+    3.. run the tree sitter tests locally (note: still no CI):
+        ``npx tree-sitter test``
+    4.. commit everything to git. **make sure you only do this AFTER
+        regeneration!** otherwise, the generated C file will be out-of-sync
+    5.. add a tag in git with the package version number to create
+    6.. push the branch and the tag to upstream
+    7.. on github, in the tree-sitter-cleancopy repo, create a new
+        release from the pushed tag, and publish it:
+        [[https://github.com/Taev-dev/tree-sitter-cleancopy/releases/new]]
+    8.. switch over to repository actions. you should have an automatic
+        build that's working on publishing to pypi prod
+    9.. when the build is ready, you'll need to approve it
+    10.. then it should go live on pypi; make sure to update your pyproject.toml
+        to force the dep to update locally
+        1.. update pyproject.toml with the min version
+        2.. run ``pdm lock --dev``
+        3.. run ``pdm update tree-sitter-cleancopy``
+
+
+> Tree sitter
+
+    > Things I actually ^^do^^ like
+        ++  being able to clean up the CST directly within the grammar, by
+            folding rules (via underscores) is really nice. however:
+            ++  I wish it were a bit more explicit about whether the parent
+                should include the folded rules in the capture, or treat them
+                as whitespace
+            ++  I wish there were a way to do this without the weird magic
+                of underscore namings, especially because I'd like to be
+                able to use underscore names for something else
+
+    > Grammar
+        ++  this is way, way easier to write if you already have a formal
+            grammar written. the tree sitter JS syntax has a terrible signal
+            to noise ratio. it's not hard to write, it's just hard to
+            understand at a glance. it's kinda... write-only, in a way
+        ++  **precedence needs to happen as close to the conflicting token
+            as possible.** it (evidently) doesn't trickle down into the
+            rules
+        ++  **trying to enforce a single node ID line within the CST was a
+            fool's errand!** it massively complicates EVERYTHING re: embed
+            detection, and embed detection **needs** special handling in the
+            CST, whereas IDs don't!
+        ++  ... tree sitter is actually kinda stupid (in the simplistic sense).
+            it can't detect ambiguity of terminals, or a whole bunch of other
+            situations that make it very difficult to write grammars without
+            making heavy use of an external scanner
+        ++  **note that the order of arguments in ``choice`` doesn't matter:**
+            tree-sitter isn't PEG!
+        ++  **it's probably easier to include the continuations in empty lines.**
+            it reduces a lot of checking about "is this about to have an
+            empty line?" when deciding whether or not to add a continuation
+            while peeking ahead from the previous line. same goes for EoL. In
+            other words, I think the "right" spelling for empty lines is
+            ``CONTINUATION EMPTY_LINE EOL``
+        ++  Similarly, I think it's probably a lot easier to always populate the
+            context stack with a root context at scanner creation time. otherwise
+            you end up with a bazillion bounds checks on the context stack, and
+            things just generally get ugly
+        ++  it's probably also easier (and more robust!) to include any needed
+            token context in the PendingToken struct instead of passing it
+            around within the scanner.
+        ++  separating ^^trailing^^ whitespace from ^^nih^^ whitespace was
+            actually really helpful in reducing parse problems and other
+            tree-sitter shenanigans
+
+    > Inner workings
+
+        **De/serialization can fuck your shit right up.** if you don't have them
+        exactly right, or they're incomplete, or whatever, your grammar won't work.
+        period. doesn't matter if it's error-free or anything; it'll just get screwed
+        up. end of story. **but it won't warn you; it'll just silently succeed with
+        a completely corrupted state**, resulting in a non-deterministic (and, yknow,
+        broken) parse.
+
+        **Printf debugging within external scanners can be very misleading.**
+        If your external scanner returns an invalid token, tree sitter will
+        try to recover by adding a missing symbol, and then re-starting parsing
+        from a previous state. Because it's using the de/serialization to do
+        this, if you're just watching print statements, it can seem to violate
+        invariants that you have baked into a stateful scanner. In reality,
+        though, you've discarded the previous branch, and now you might be in
+        a completely corrupted state, but you won't find out about it until
+        tree sitter can't possibly recover, or until it finishes parsing ^^with
+        an invalid result^^ but silently succeeds.
+
+        **At EoF, ``lexer->get_column`` always returns 0.**
+
+        **If you return True from the scanner, but don't set return_token,
+        then the result is the 0th token, which -- conveniently enough -- is
+        the error token.*
+
+    > Tree sitter CLI
+        Location:
+        ``C:\Users\Niklas\AppData\Roaming\tree-sitter\config.json``
+
+        It's super easy to forget to call BOTH ``generate`` and ``parse``, but
+        if you ^^do^^ forget, you'll get nonsensical results.
+
+        **You had to create your own debugging env var.** On powershell:
+        ``$env:CC_DEBUG='1'; npx tree-sitter test --debug; Remove-Item Env:\CC_DEBUG``
+
+    > Etc
+        Long-term... you're definitely going to want to write your own
+        parser. Like... seriously. I'm pretty sure I'd rather write my
+        own parser RIGHT NOW, but you gotta start somewhere, and treesitter
+        is useful for other integrations
+
+        **You should consider replacing some of the asserts with a scheduled
+        error sentinel, to trigger parsing errors, instead of assertions, which
+        panic the parsing.**
+
+        Eventually, you'll want to have a whole CI suite available for
+        cleancopy, especially including a way to specify particular constraints
+        on metadata definition (esp metadata keys).
+
+    > Python binding
+        **You need to change setup.py to include explicit links to all C source
+        files before building.** If you see compiler errors -- including missing
+        links and/or symbols -- this is probably the source.
