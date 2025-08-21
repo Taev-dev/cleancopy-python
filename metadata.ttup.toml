@@ -1,0 +1,3 @@
+package_name = "cleancopy"
+package_desc = "Python bindings to the cleancopy lightweight markup language"
+min_python_version = "3.12"

@@ -1,3 +1,3 @@
-# Cleancopy
+See [here](/README.clc) for more.
 
-Python bindings to the cleancopy lightweight markup language.
+TODO: auto-generate this from distilled cleancopy.

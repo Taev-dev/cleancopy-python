@@ -1,3 +1,5 @@
+# THESE HAVE BEEN CARRIED AROUND FOR AGES #########################
+
 # Local .terraform directories
 **/.terraform/*
 
@@ -91,13 +93,16 @@ tests/logs/
 reference/
 venv/
 
+# PDM stuff
+.pdm-python
+.pdm-build/
+
 # Sublime stuff
 *.sublime-project
 *.sublime-workspace
 
 # JS/svelte stuff
 .idea
-.DS_Store
 .nyc_output
 .vscode
 node_modules
@@ -132,4 +137,33 @@ yarn-error.log
 /__sapper__/
 .npmrc
 _prompt/
-.pdm-python
+
+
+
+# SVELTE ADDED THESE ##############################################
+
+test-results
+node_modules
+
+# Output
+.output
+.vercel
+.netlify
+.wrangler
+/.svelte-kit
+/build
+/dist
+
+# OS
+**/.DS_Store
+**/Thumbs.db
+
+# Env
+.env
+.env.*
+!.env.example
+!.env.test
+
+# Vite
+vite.config.js.timestamp-*
+vite.config.ts.timestamp-*

@@ -1,0 +1,102 @@
+name: CI tests
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  NODE_VERSION_FOR_LINTING: "20.11.1"
+  PYTHON_VERSION_FOR_LINTING: "3.13"
+  UV_VERSION: "0.8.6"
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+
+    steps:
+      # Root path under $GITHUB_WORKSPACE
+      - uses: actions/checkout@v4
+
+      - name: Set up python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION_FOR_LINTING }}
+
+      - name: Set up node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION_FOR_LINTING }}
+
+      - name: Set up UV (ubuntu one-shot)
+        shell: bash
+        run: |
+          curl -LsSf https://astral.sh/uv/${{env.UV_VERSION}}/install.sh | sh
+
+      - name: Set up pyright
+        shell: bash
+        run: |
+          npm install -g pyright
+
+      - name: Set up linting deps
+        shell: bash
+        run: |
+          uv sync --no-install-project --only-group lint
+
+      - name: Run ruff
+        shell: bash
+        run:
+          uv run ruff check
+      
+      - name: Run pyright
+        shell: bash
+        run: |
+          pyright --pythonpath=.venv/bin/python
+
+  unittests:
+    name: Pytest -- unittests
+    needs: [lint]
+    timeout-minutes: 5
+
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.13']
+        os: ['ubuntu-latest', 'windows-latest', 'macos-latest']
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      # Root path under $GITHUB_WORKSPACE
+      - uses: actions/checkout@v4
+
+      - name: Set up python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Update pip
+        run: python -m pip install --upgrade pip
+
+      - name: Set up UV (mac/linux)
+        shell: bash
+        if: ${{ matrix.os != 'windows-latest' }}
+        run: |
+          curl -LsSf https://astral.sh/uv/${{env.UV_VERSION}}/install.sh | sh
+
+      - name: Set up UV (windows)
+        shell: bash
+        if: ${{ matrix.os == 'windows-latest' }}
+        run: |
+          powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/${{env.UV_VERSION}}/install.ps1 | iex"
+
+      - name: Install package to test
+        shell: bash
+        run: uv sync
+
+      - name: Run pytest
+        shell: bash
+        run: set -eo pipefail && uv run pytest --run-integr8 --run-e2e
+
+      # TODO: decide how to set up coverage
