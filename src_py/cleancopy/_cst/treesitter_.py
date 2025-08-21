@@ -8,7 +8,6 @@ from collections.abc import Callable
 from collections.abc import Iterator
 from decimal import Decimal
 from enum import StrEnum
-from typing import Any
 from typing import Literal
 from typing import cast
 
