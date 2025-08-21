@@ -1,5 +1,5 @@
 [project]
-name = "cleancopy"
+name = "pycleancopy"
 description = "Python bindings to the cleancopy lightweight markup language"
 authors = []
 dynamic = ["version"]
