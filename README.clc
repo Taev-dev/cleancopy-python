@@ -2,3 +2,18 @@
 description: 'Python bindings to the cleancopy lightweight markup language'
 <
 
+
+> Quickstart
+    First, install ``pycleancopy`` from pypi, ex: ``pip install pycleancopy``.
+
+    > Usage
+    __embed__: 'code/python'
+        from cleancopy import parse
+        from cleancopy import transform
+        from cleancopy.ast import Document
+        from cleancopy.cst import CSTDocument
+
+        cst_doc = parse(b'**My cleancopy document**')
+        assert isinstance(cst_doc, CSTDocument)
+        ast_doc = transform(cst_doc)
+        assert isinstance(ast_doc, Document)

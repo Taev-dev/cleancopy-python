@@ -1,3 +1,5 @@
+# Note: this shadows the stdlib ast module, so... nothing here is going to be
+# able to import it. Which should be fine.
 from __future__ import annotations
 
 import logging
