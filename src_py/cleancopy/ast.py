@@ -5,11 +5,14 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
+from dataclasses import field
 from dataclasses import fields
 from decimal import Decimal
+from typing import Annotated
 from typing import Any
 from typing import ClassVar
-from typing import Optional
+
+from docnote import Note
 
 from cleancopy.spectypes import EmbedFallbackBehavior
 from cleancopy.spectypes import InlineFormatting
@@ -19,9 +22,9 @@ from cleancopy.spectypes import MetadataMagics
 # Note: URIs are automatically converted to strings; they're only separate in
 # the CST because sugared strings are a strict subset of strings and need to
 # be differentiated from the other target types in the grammar itself
-type MetadataTarget = (
-    MetadataStr | MetadataMention | MetadataTag | MetadataVariable
-    | MetadataReference)
+type LinkTarget = (
+    StrDataType | MentionDataType | TagDataType | VariableDataType
+    | ReferenceDataType)
 # This is used to omit reserved but unused metadata keys from the results. We
 # do this so people don't accidentally try to use them, and then later on
 # we have to worry about compatibility issues if we need to introduce new
@@ -40,24 +43,25 @@ class ASTNode:
 @dataclass(kw_only=True)
 class Document(ASTNode):
     # Note: this comes from the __doc_meta__ node
-    title: Richtext | None
-    metadata: BlockMetadata | None
-    root: RichtextDocNode
+    title: RichtextInlineNode | None
+    info: BlockNodeInfo | None
+    root: RichtextBlockNode
     # TODO: add other helper methods, like searching by ID
 
 
 @dataclass(kw_only=True)
-class DocNode(ASTNode):
+class BlockNode(ASTNode):
     """The base class for both richtext and embedded nodes."""
-    title: Optional[Richtext] = None
-    metadata: Optional[BlockMetadata] = None
+    title: RichtextInlineNode | None = None
+    info: BlockNodeInfo | None = None
+    depth: int
 
 
 @dataclass(kw_only=True)
-class RichtextDocNode(DocNode):
-    content: list[Paragraph | DocNode]
+class RichtextBlockNode(BlockNode):
+    content: list[Paragraph | BlockNode]
 
-    def __getitem__(self, index: int) -> Paragraph | DocNode:
+    def __getitem__(self, index: int) -> Paragraph | BlockNode:
         return self.content[index]
 
     def __len__(self):
@@ -68,7 +72,7 @@ class RichtextDocNode(DocNode):
 
 
 @dataclass(kw_only=True)
-class EmbeddingDocNode(DocNode):
+class EmbeddingBlockNode(BlockNode):
     # Can be an explicit None if it's an empty node
     content: str | None
 
@@ -79,8 +83,8 @@ class Paragraph(ASTNode):
     but they **cannot** contain an empty line.
     """
     # Note: these are separate because lists have their own separate
-    # RichtextContext for items
-    content: list[Richtext | List_ | Annotation]
+    # info contexts for items
+    content: list[RichtextInlineNode | List_ | Annotation]
 
     def __bool__(self) -> bool:
         """Returns True if the paragraph has any content at all, whether
@@ -102,9 +106,9 @@ class ListItem(ASTNode):
 
 
 @dataclass(kw_only=True)
-class Richtext[C: InlineMetadata | None](ASTNode):
-    context: C
-    content: list[str | Richtext]
+class RichtextInlineNode(ASTNode):
+    info: InlineNodeInfo | None
+    content: list[str | RichtextInlineNode]
 
     @property
     def has_display_content(self) -> bool:
@@ -121,6 +125,8 @@ class Richtext[C: InlineMetadata | None](ASTNode):
 
 @dataclass(kw_only=True)
 class Annotation(ASTNode):
+    """Annotations / comments: full lines beginning with ``##``.
+    """
     content: str
 
 
@@ -131,36 +137,27 @@ class _MemoizedFieldNames:
     @staticmethod
     def memoize[C: type](for_cls: C) -> C:
         for_cls._field_names = frozenset(
-            {field.name for field in fields(for_cls)})
+            {dc_field.name for dc_field in fields(for_cls)})
         return for_cls
 
 
 @_MemoizedFieldNames.memoize
 @dataclass(kw_only=True)
-class Metadata(ASTNode, _MemoizedFieldNames):
+class NodeInfo[T: MetadataAssignment | Annotation](
+        ASTNode, _MemoizedFieldNames):
 
-    # TODO: uri vs ref vs mention vs...
-    target: Optional[MetadataTarget] = None
+    target: LinkTarget | None = None
+    metadata: Annotated[
+            dict[str, DataType],
+            Note('''Any normalized metadata values (ie, ``__missing__``
+                removed, etc) that do not have special meaning within the
+                cleancopy spec.''')
+        ] = field(default_factory=dict)
 
-    def __post_init__(self):
-        self._lookup: dict[str, MetadataValue | None] = {}
-        self._payload: list
+    _payload: list[T] = field(
+        default_factory=list, init=False, repr=False, compare=False)
 
-    # TODO: we should add items, .get, etc
-    def __getitem__(self, key: str) -> MetadataValue:
-        """Note: THIS is where we normalize things re: missings, None,
-        etc.
-        """
-        maybe_result = self._lookup[key]
-
-        if maybe_result is None:
-            raise KeyError(
-                'Metadata key was explicitly set to __missing__', key)
-
-        else:
-            return maybe_result
-
-    def _add(self, line: MetadataAssignment | Annotation):
+    def _add(self, line: T):
         """Call this when building the AST. Intended for use within the
         CST -> AST transition. So... semi-public. Public in the sense
         that it's used outside of this module, but not public in the
@@ -175,7 +172,9 @@ class Metadata(ASTNode, _MemoizedFieldNames):
 
             except ValueError:
                 if METADATA_MAGIC_PATTERN.match(key) is None:
-                    self._lookup[key] = line.value
+                    # Note: this removes any explicit __missing__ value
+                    if line.value is not None:
+                        self.metadata[key] = line.value
                 else:
                     logger.warning('Ignoring reserved metadata key: %s', key)
 
@@ -185,7 +184,7 @@ class Metadata(ASTNode, _MemoizedFieldNames):
                     maybe_value = line.value
                     # Note that we want to extract the actual metadata value;
                     # the magics are all strongly-typed, so we don't need to
-                    # worry about the MetadataValue container around them.
+                    # worry about the DataType container around them.
                     # (even though it's preserved within .as_declared)
                     if maybe_value is None:
                         value_to_use = None
@@ -198,57 +197,12 @@ class Metadata(ASTNode, _MemoizedFieldNames):
                         'Wrong metadata type for reserved key %s; ignoring',
                         key)
 
-
-@_MemoizedFieldNames.memoize
-@dataclass(kw_only=True)
-class InlineMetadata(Metadata):
-    """InlineMetadata is used only for, yknow, inline metadata.
-    Note that all of the various formatting tags get sugared into
-    inline metadatas.
-    """
-    icu_1: Optional[MetadataReference] = None
-    fmt: Optional[InlineFormatting] = None
-    sugared: Optional[bool] = None
-
-    def __post_init__(self):
-        super().__post_init__()
-        self._payload: list[MetadataAssignment] = []
-
     @property
-    def as_declared(self) -> tuple[MetadataAssignment, ...]:
+    def as_declared(self) -> tuple[T, ...]:
         """This can be used to access the raw assignments, as declared,
         in their exact order. For inline metadata, this is only relevant
         if there are multiple metadata assignments using the same key
-        in the same InlineMetadata instance.
-        """
-        # The only reason we do a tuple here is to make sure that the outside
-        # world doesn't try to modify this!
-        return tuple(self._payload)
-
-
-@_MemoizedFieldNames.memoize
-@dataclass(kw_only=True)
-class BlockMetadata(Metadata):
-    """BlockMetadata is used both for node metadata and for document
-    metadata (which is itself just an empty node at the toplevel with
-    a special magic key set).
-    """
-    is_doc_metadata: bool = False
-    id_: Optional[MetadataStr] = None
-    embed: Optional[MetadataStr] = None
-    fallback: Optional[EmbedFallbackBehavior] = None
-
-    def __post_init__(self):
-        super().__post_init__()
-        self._payload: list[MetadataAssignment | Annotation] = []
-
-    @property
-    def as_declared(self) -> tuple[MetadataAssignment | Annotation, ...]:
-        """This can be used to access the raw assignments, as declared,
-        in their exact order, **including any annotations**. This is
-        useful both if you want access to the annotations, ^^or^^ if
-        there are multiple metadata assignments using the same key in
-        the same BlockMetadata instance.
+        in the same InlineNodeInfo instance.
         """
         # The only reason we do a tuple here is to make sure that the outside
         # world doesn't try to modify this!
@@ -258,55 +212,80 @@ class BlockMetadata(Metadata):
 @dataclass
 class MetadataAssignment(ASTNode):
     key: str
-    value: MetadataValue | None
+    value: DataType | None
+
+
+@_MemoizedFieldNames.memoize
+@dataclass(kw_only=True)
+class InlineNodeInfo(NodeInfo[MetadataAssignment]):
+    """InlineNodeInfo is used only for, yknow, inline metadata.
+    Note that all of the various formatting tags get sugared into
+    inline metadatas.
+    """
+    icu_1: ReferenceDataType | None = None
+    fmt: InlineFormatting | None = None
+    sugared: bool | None = None
+
+
+@_MemoizedFieldNames.memoize
+@dataclass(kw_only=True)
+class BlockNodeInfo(NodeInfo[MetadataAssignment | Annotation]):
+    """BlockNodeInfo is used both for node info and for document
+    info (which is itself just an empty node at the toplevel with
+    a special magic key set).
+    """
+    is_doc_metadata: bool = False
+    id_: StrDataType | None = None
+    embed: StrDataType | None = None
+    fallback: EmbedFallbackBehavior | None = None
 
 
 @dataclass
-class MetadataValue(ASTNode):
+class DataType(ASTNode):
     # Note: needs to be overridden by subclasses
     value: Any
 
 
 @dataclass
-class MetadataStr(MetadataValue):
+class StrDataType(DataType):
     value: str
 
 
 @dataclass
-class MetadataInt(MetadataValue):
+class IntDataType(DataType):
     value: int
 
 
 @dataclass
-class MetadataDecimal(MetadataValue):
+class DecimalDataType(DataType):
     value: Decimal
 
 
 @dataclass
-class MetadataBool(MetadataValue):
+class BoolDataType(DataType):
     value: bool
 
 
 @dataclass
-class MetadataNull(MetadataValue):
+class NullDataType(DataType):
     value: None
 
 
 @dataclass
-class MetadataMention(MetadataValue):
+class MentionDataType(DataType):
     value: str
 
 
 @dataclass
-class MetadataTag(MetadataValue):
+class TagDataType(DataType):
     value: str
 
 
 @dataclass
-class MetadataVariable(MetadataValue):
+class VariableDataType(DataType):
     value: str
 
 
 @dataclass
-class MetadataReference(MetadataValue):
+class ReferenceDataType(DataType):
     value: str

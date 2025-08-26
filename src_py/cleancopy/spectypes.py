@@ -29,7 +29,7 @@ class EmbedFallbackBehavior(StrEnum):
 
 
 class MetadataMagics(Enum):
-    # Note: the field names here need to match the field names in ast.nodes
+    # Note: the field names here need to match the field names in ast
     id_ = '__id__'
     embed = '__embed__'
     target = '__target__'

@@ -147,8 +147,6 @@ def handle_node(field_name: _TSNamedField, node: TSNode) -> CSTNode | None:
     handler = _TS_NODE_REGISTRY.get(field_name)
 
     if handler is None:
-        print(_TS_NODE_REGISTRY)
-        print(field_name)
         logger.warning(
             'Node type %s not yet implemented: grammar_name %s, field_name %s',
             node.type, node.grammar_name, field_name)
@@ -376,7 +374,6 @@ def process_richtext_line(node: TSNode) -> CSTRichtext:
         ):
             result.content.append(process_fmt_bracket(child))
         else:
-            print(child.type)
             raise TypeError(
                 'Invalid richtext line child type!',
                 child, child.type, child.grammar_name)
