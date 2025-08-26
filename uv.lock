@@ -22,6 +22,15 @@ wheels = [
 ]
 
 [[package]]
+name = "docnote"
+version = "2025.8.5.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/d7/2d/370b534d6c052527646413e56f1aed8d6ef3a0cc15ffe842850c623185bb/docnote-2025.8.5.0.tar.gz", hash = "sha256:3a9fd348a56ad8345db6eba939b88d7eecd853c43b677db6c01bc5fe9f8aa32d", size = 5582, upload-time = "2025-08-05T11:52:34.418Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/58/19/ca8ddc580c02d782549df6b2c214f44a517fc174db671fbb0b38a3a6008f/docnote-2025.8.5.0-py3-none-any.whl", hash = "sha256:301691e49d868b56f85db4b6bc9b8c28765ea4bd8ff4e55eaef05479c87a633e", size = 5844, upload-time = "2025-08-05T11:52:33.262Z" },
+]
+
+[[package]]
 name = "iniconfig"
 version = "2.1.0"
 source = { registry = "https://pypi.org/simple" }
@@ -52,6 +61,7 @@ wheels = [
 name = "pycleancopy"
 source = { editable = "." }
 dependencies = [
+    { name = "docnote" },
     { name = "tree-sitter" },
     { name = "tree-sitter-cleancopy" },
 ]
@@ -70,6 +80,7 @@ test = [
 
 [package.metadata]
 requires-dist = [
+    { name = "docnote", specifier = ">=2025.8.5.0" },
     { name = "tree-sitter", specifier = ">=0.22.3" },
     { name = "tree-sitter-cleancopy", specifier = ">=0.0.18" },
 ]

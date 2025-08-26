@@ -7,6 +7,7 @@ requires-python = ">= 3.12"
 readme = "README.md"
 
 dependencies = [
+    "docnote>=2025.8.5.0",
     "tree-sitter >= 0.22.3",
     "tree-sitter-cleancopy >= 0.0.18",
 ]
