@@ -1,7 +1,9 @@
+from __future__ import annotations
+
 import pytest
 
+from cleancopy import Abstractifier
 from cleancopy import parse
-from cleancopy import transform
 
 from cleancopy_testutils import get_testvecs
 
@@ -16,4 +18,5 @@ def test_all_testvecs(filestem: str, tvec_bytes: bytes):
     it isn't a particularly useful test, but it's better than nothing.
     """
     cst_doc = parse(tvec_bytes)
-    transform(cst_doc)
+    transformer = Abstractifier()
+    transformer.convert(cst_doc)
