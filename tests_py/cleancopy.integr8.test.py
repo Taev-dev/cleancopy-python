@@ -79,3 +79,20 @@ class TestRichtextBlockNode:
         assert isinstance(result[1], RichtextBlockNode)
         assert len(result[1].content) == 1
         assert isinstance(result[1].content[0], Paragraph)
+
+    def test_depths(self):
+        transformer = Abstractifier()
+        result = dedoc(transformer.convert(parse(doc_prep('''
+            foo
+
+            >
+                bar
+
+                >
+                    baz'''))))
+
+        assert isinstance(result[0], Paragraph)
+        assert isinstance(result[1], RichtextBlockNode)
+        assert result[1].depth == 1
+        assert isinstance(result[1].content[1], RichtextBlockNode)
+        assert result[1].content[1].depth == 2

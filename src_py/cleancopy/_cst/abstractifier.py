@@ -119,58 +119,29 @@ class Abstractifier:
 
         ctx_token = _depth_tracker.set(depth)
         try:
-            # Awkwardly, we can have empty lines interleaved with richtexts
-            merged_title_richtext_content = []
-            for cst_title_node in cst_node.title:
-                if isinstance(cst_title_node, CSTEmptyLine):
-                    # Let the dedicated function handle conversion instead of
-                    # repeating it here. The important thing is that, in a
-                    # title line, we're ignoring empty lines
-                    merged_title_richtext_content.append(
-                        self.replace_linebreak_with)
-                else:
-                    merged_title_richtext_content.extend(cst_title_node.content)
-
-            # A little weird, but we can just create a new virtual richtext
-            # item and use it instead
-            if (
-                merged_title_richtext_content
-                and any(merged_title_richtext_content)
-            ):
-                title = cast(
-                    RichtextInlineNode,
-                    self._convert(
-                        CSTRichtext(content=merged_title_richtext_content)))
-            else:
-                title = None
-
-            nonempty_metadata = cst_node.nonempty_metadata
-            if nonempty_metadata:
-                metadata = BlockNodeInfo()
-                for cst_metadata_node in nonempty_metadata:
-                    ast_metadata_node = cast(
-                        MetadataAssignment | Annotation,
-                        self._convert(cst_metadata_node))
-                    metadata._add(ast_metadata_node)
-                is_embed = (metadata.embed is not None)
-
-            else:
-                is_embed = False
-                metadata = None
+            title = self._convert_blocknode_title(cst_node.title)
+            is_embed, blocknode_info = self._convert_blocknode_info(
+                cst_node.nonempty_metadata)
 
             cst_node_content = cst_node.content
             if cst_node_content is None:
                 if is_embed:
                     return EmbeddingBlockNode(
-                        title=title, info=metadata, content=None, depth=depth)
+                        title=title,
+                        info=blocknode_info,
+                        content=None,
+                        depth=depth)
                 else:
                     return RichtextBlockNode(
-                        title=title, info=metadata, content=[], depth=depth)
+                        title=title,
+                        info=blocknode_info,
+                        content=[],
+                        depth=depth)
 
             elif isinstance(cst_node_content, CSTDocumentNodeContentRichtext):
                 result = RichtextBlockNode(
                     title=title,
-                    info=metadata,
+                    info=blocknode_info,
                     content=[],
                     depth=depth)
                 self._process_richtext_block_content(
@@ -180,7 +151,7 @@ class Abstractifier:
             elif isinstance(cst_node_content, CSTDocumentNodeContentEmbedding):
                 return EmbeddingBlockNode(
                     title=title,
-                    info=metadata,
+                    info=blocknode_info,
                     content=cst_node_content.content,
                     depth=depth)
 
@@ -190,6 +161,55 @@ class Abstractifier:
 
         finally:
             _depth_tracker.reset(ctx_token)
+
+    def _convert_blocknode_title(
+            self,
+            title_elements: list[CSTRichtext | CSTEmptyLine]
+            ) -> RichtextInlineNode | None:
+        # Awkwardly, we can have empty lines interleaved with richtexts
+        merged_title_richtext_content = []
+        for cst_title_node in title_elements:
+            if isinstance(cst_title_node, CSTEmptyLine):
+                # Let the dedicated function handle conversion instead of
+                # repeating it here. The important thing is that, in a
+                # title line, we're ignoring empty lines
+                merged_title_richtext_content.append(
+                    self.replace_linebreak_with)
+            else:
+                merged_title_richtext_content.extend(cst_title_node.content)
+
+        # A little weird, but we can just create a new virtual richtext
+        # item and use it instead
+        if (
+            merged_title_richtext_content
+            and any(merged_title_richtext_content)
+        ):
+            return cast(
+                RichtextInlineNode,
+                self._convert(
+                    CSTRichtext(content=merged_title_richtext_content)))
+        # Explicit here just for clarity
+        else:
+            return None
+
+    def _convert_blocknode_info(
+            self,
+            nonempty_cst_metadata: list[CSTMetadataAssignment | CSTAnnotation]
+            ) -> tuple[bool, BlockNodeInfo | None]:
+        if nonempty_cst_metadata:
+            blocknode_info = BlockNodeInfo()
+            for cst_metadata_node in nonempty_cst_metadata:
+                ast_metadata_node = cast(
+                    MetadataAssignment | Annotation,
+                    self._convert(cst_metadata_node))
+                blocknode_info._add(ast_metadata_node)
+            is_embed = (blocknode_info.embed is not None)
+
+        else:
+            is_embed = False
+            blocknode_info = None
+
+        return is_embed, blocknode_info
 
     @_convert.register
     def _(self, cst_node: CSTRichtext) -> RichtextInlineNode:
@@ -224,13 +244,14 @@ class Abstractifier:
                             span_to_pop.current_span.content.append(
                                 ''.join(span_to_pop.to_join))
                     else:
+                        nested_info = InlineNodeInfo()
                         nested_richtext = RichtextInlineNode(
-                            info=InlineNodeInfo(),
+                            info=nested_info,
                             content=[])
-                        nested_richtext.info._add(MetadataAssignment(
+                        nested_info._add(MetadataAssignment(
                             key=MetadataMagics.sugared.value,
                             value=BoolDataType(value=True)))
-                        nested_richtext.info._add(MetadataAssignment(
+                        nested_info._add(MetadataAssignment(
                             key=MetadataMagics.fmt.value,
                             value=StrDataType(value=this_fmt_marker)))
                         fmt_stack.append(_FmtStackState(
