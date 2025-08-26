@@ -1,3 +1,4 @@
+from inspect import cleandoc
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).parent.parent.parent.parent.parent
@@ -14,3 +15,10 @@ def get_testvecs() -> dict[str, bytes]:
             retval[path.stem] = path.read_bytes()
 
     return retval
+
+
+def doc_prep(doc: str) -> bytes:
+    """Cleans whitespace from a docstring-like string and encodes it
+    into bytes for parsing.
+    """
+    return cleandoc(doc).encode('utf-8')
