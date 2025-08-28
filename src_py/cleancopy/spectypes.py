@@ -13,6 +13,11 @@ class InlineFormatting(StrEnum):
     STRONG = '__strong__'
     EMPHASIS = '__emphasis__'
     STRIKE = '__strike__'
+    QUOTE = '__quote__'
+
+
+class BlockFormatting(StrEnum):
+    QUOTE = '__quote__'
 
 
 # These string values are not part of the spec -- they're purely an
@@ -28,13 +33,25 @@ class EmbedFallbackBehavior(StrEnum):
     HIDDEN = 'HIDDEN'
 
 
-class MetadataMagics(Enum):
-    # Note: the field names here need to match the field names in ast
-    id_ = '__id__'
+class BlockMetadataMagic(Enum):
+    # Note: the field **names** here need to match the field names in ast, and
+    # the field **values** need to match the spec.
+    crossref = '__crossref__'
     embed = '__embed__'
     target = '__target__'
-    icu_1 = '__icu-1__'
-    fmt = '__fmt__'
-    sugared = '__sugared__'
+    formatting = '__formatting__'
+    citation = '__citation__'
     is_doc_metadata = '__doc_meta__'
     fallback = '__fallback__'
+    source = '__source__'
+
+
+class InlineMetadataMagic(Enum):
+    # Note: the field **names** here need to match the field names in ast, and
+    # the field **values** need to match the spec.
+    crossref = '__crossref__'
+    target = '__target__'
+    icu_1 = '__icu-1__'
+    formatting = '__formatting__'
+    citation = '__citation__'
+    sugared = '__sugared__'

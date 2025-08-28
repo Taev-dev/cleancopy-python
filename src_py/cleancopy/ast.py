@@ -11,13 +11,16 @@ from decimal import Decimal
 from typing import Annotated
 from typing import Any
 from typing import ClassVar
+from typing import Protocol
 
 from docnote import Note
 
+from cleancopy.spectypes import BlockFormatting
+from cleancopy.spectypes import BlockMetadataMagic
 from cleancopy.spectypes import EmbedFallbackBehavior
 from cleancopy.spectypes import InlineFormatting
+from cleancopy.spectypes import InlineMetadataMagic
 from cleancopy.spectypes import ListType
-from cleancopy.spectypes import MetadataMagics
 
 # Note: URIs are automatically converted to strings; they're only separate in
 # the CST because sugared strings are a strict subset of strings and need to
@@ -33,14 +36,14 @@ METADATA_MAGIC_PATTERN = re.compile(r'^__.+__$')
 logger = logging.getLogger(__name__)
 
 
-@dataclass(kw_only=True)
+@dataclass(kw_only=True, slots=True)
 class ASTNode:
     """Currently not really used for anything except for annotations,
     but at any rate: this is the base class for all AST nodes.
     """
 
 
-@dataclass(kw_only=True)
+@dataclass(kw_only=True, slots=True)
 class Document(ASTNode):
     # Note: this comes from the __doc_meta__ node
     title: RichtextInlineNode | None
@@ -49,7 +52,7 @@ class Document(ASTNode):
     # TODO: add other helper methods, like searching by ID
 
 
-@dataclass(kw_only=True)
+@dataclass(kw_only=True, slots=True)
 class BlockNode(ASTNode):
     """The base class for both richtext and embedded nodes."""
     title: RichtextInlineNode | None = None
@@ -57,7 +60,7 @@ class BlockNode(ASTNode):
     depth: int
 
 
-@dataclass(kw_only=True)
+@dataclass(kw_only=True, slots=True)
 class RichtextBlockNode(BlockNode):
     content: list[Paragraph | BlockNode]
 
@@ -71,13 +74,13 @@ class RichtextBlockNode(BlockNode):
         return iter(self.content)
 
 
-@dataclass(kw_only=True)
+@dataclass(kw_only=True, slots=True)
 class EmbeddingBlockNode(BlockNode):
     # Can be an explicit None if it's an empty node
     content: str | None
 
 
-@dataclass(kw_only=True)
+@dataclass(kw_only=True, slots=True)
 class Paragraph(ASTNode):
     """Paragraphs can contain multiple lines and/or multiple line types,
     but they **cannot** contain an empty line.
@@ -93,19 +96,19 @@ class Paragraph(ASTNode):
         return bool(self.content)
 
 
-@dataclass(kw_only=True)
+@dataclass(kw_only=True, slots=True)
 class List_(ASTNode):  # noqa: N801
     type_: ListType
     content: list[ListItem]
 
 
-@dataclass(kw_only=True)
+@dataclass(kw_only=True, slots=True)
 class ListItem(ASTNode):
     index: int | None
     content: list[Paragraph]
 
 
-@dataclass(kw_only=True)
+@dataclass(kw_only=True, slots=True)
 class RichtextInlineNode(ASTNode):
     info: InlineNodeInfo | None
     content: list[str | RichtextInlineNode]
@@ -123,7 +126,7 @@ class RichtextInlineNode(ASTNode):
                 isinstance(segment, Annotation) for segment in self.content)
 
 
-@dataclass(kw_only=True)
+@dataclass(kw_only=True, slots=True)
 class Annotation(ASTNode):
     """Annotations / comments: full lines beginning with ``##``.
     """
@@ -141,12 +144,19 @@ class _MemoizedFieldNames:
         return for_cls
 
 
+class _NodeInfoProtocol(Protocol):
+    METADATA_MAGICS: ClassVar[
+        type[BlockMetadataMagic] | type[InlineMetadataMagic]]
+    FORMATTINGS: ClassVar[type[InlineFormatting] | type[BlockFormatting]]
+
+
 @_MemoizedFieldNames.memoize
-@dataclass(kw_only=True)
+@dataclass(kw_only=True, slots=True)
 class NodeInfo[T: MetadataAssignment | Annotation](
-        ASTNode, _MemoizedFieldNames):
+        ASTNode, _MemoizedFieldNames, _NodeInfoProtocol):
 
     target: LinkTarget | None = None
+    crossref: StrDataType | None = None
     metadata: Annotated[
             dict[str, DataType],
             Note('''Any normalized metadata values (ie, ``__missing__``
@@ -168,34 +178,40 @@ class NodeInfo[T: MetadataAssignment | Annotation](
             key = line.key
 
             try:
-                metadata_magic = MetadataMagics(key)
+                metadata_magic = self.METADATA_MAGICS(key)
 
             except ValueError:
                 if METADATA_MAGIC_PATTERN.match(key) is None:
                     # Note: this removes any explicit __missing__ value
-                    if line.value is not None:
-                        self.metadata[key] = line.value
-                else:
-                    logger.warning('Ignoring reserved metadata key: %s', key)
-
-            else:
-                maybe_field_name = metadata_magic.name
-                if maybe_field_name in self._field_names:
-                    maybe_value = line.value
-                    # Note that we want to extract the actual metadata value;
-                    # the magics are all strongly-typed, so we don't need to
-                    # worry about the DataType container around them.
-                    # (even though it's preserved within .as_declared)
-                    if maybe_value is None:
-                        value_to_use = None
-                    else:
-                        value_to_use = maybe_value.value
-
-                    setattr(self, maybe_field_name, value_to_use)
+                    if line.data is not None:
+                        self.metadata[key] = line.data
                 else:
                     logger.warning(
-                        'Wrong metadata type for reserved key %s; ignoring',
-                        key)
+                        'Ignoring unknown reserved metadata key: %s', key)
+
+            else:
+                # None here means __missing__, which we normalize out
+                if line.data is None:
+                    return
+
+                maybe_field_name = metadata_magic.name
+                # The values here are themselves enums, so we have special
+                # handling to make sure they're correct
+                if maybe_field_name == 'formatting':
+                    try:
+                        value_to_use = self.FORMATTINGS(line.data.value)
+                    except ValueError:
+                        logger.warning(
+                            'Ignoring invalid formatting: %s', line.data)
+                        return
+
+                else:
+                    value_to_use = line.data
+
+                # Note: if you get attribute errors here, it almost certainly
+                # means that the spectypes have drifted out of sync with the
+                # AST fields on the dataclasses
+                setattr(self, maybe_field_name, value_to_use)
 
     @property
     def as_declared(self) -> tuple[T, ...]:
@@ -209,83 +225,92 @@ class NodeInfo[T: MetadataAssignment | Annotation](
         return tuple(self._payload)
 
 
-@dataclass
+@dataclass(slots=True)
 class MetadataAssignment(ASTNode):
     key: str
-    value: DataType | None
+    data: DataType | None
 
 
 @_MemoizedFieldNames.memoize
-@dataclass(kw_only=True)
+@dataclass(kw_only=True, slots=True)
 class InlineNodeInfo(NodeInfo[MetadataAssignment]):
     """InlineNodeInfo is used only for, yknow, inline metadata.
     Note that all of the various formatting tags get sugared into
     inline metadatas.
     """
+    METADATA_MAGICS = InlineMetadataMagic
+    FORMATTINGS = InlineFormatting
+
     icu_1: ReferenceDataType | None = None
-    fmt: InlineFormatting | None = None
+    formatting: InlineFormatting | None = None
+    citation: StrDataType | None = None
     sugared: bool | None = None
 
 
 @_MemoizedFieldNames.memoize
-@dataclass(kw_only=True)
+@dataclass(kw_only=True, slots=True)
 class BlockNodeInfo(NodeInfo[MetadataAssignment | Annotation]):
     """BlockNodeInfo is used both for node info and for document
     info (which is itself just an empty node at the toplevel with
     a special magic key set).
     """
+    METADATA_MAGICS = BlockMetadataMagic
+    FORMATTINGS = BlockFormatting
+
     is_doc_metadata: bool = False
-    id_: StrDataType | None = None
     embed: StrDataType | None = None
     fallback: EmbedFallbackBehavior | None = None
+    formatting: BlockFormatting | None = None
+    citation: StrDataType | None = None
+    source: LinkTarget | None = None
 
 
-@dataclass
-class DataType(ASTNode):
+@dataclass(slots=True, frozen=True)
+class DataType:
     # Note: needs to be overridden by subclasses
     value: Any
 
 
-@dataclass
+@dataclass(slots=True, frozen=True)
 class StrDataType(DataType):
     value: str
 
 
-@dataclass
+@dataclass(slots=True, frozen=True)
 class IntDataType(DataType):
     value: int
 
 
-@dataclass
+@dataclass(slots=True, frozen=True)
 class DecimalDataType(DataType):
     value: Decimal
 
 
-@dataclass
+@dataclass(slots=True, frozen=True)
 class BoolDataType(DataType):
     value: bool
 
 
-@dataclass
+@dataclass(slots=True, frozen=True)
 class NullDataType(DataType):
     value: None
 
 
-@dataclass
+@dataclass(slots=True, frozen=True)
 class MentionDataType(DataType):
     value: str
 
 
-@dataclass
+@dataclass(slots=True, frozen=True)
 class TagDataType(DataType):
     value: str
 
 
-@dataclass
+@dataclass(slots=True, frozen=True)
 class VariableDataType(DataType):
     value: str
 
 
-@dataclass
+@dataclass(slots=True, frozen=True)
 class ReferenceDataType(DataType):
     value: str

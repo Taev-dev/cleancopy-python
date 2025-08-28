@@ -22,7 +22,6 @@ from cleancopy.ast import DataType
 from cleancopy.ast import DecimalDataType
 from cleancopy.ast import Document
 from cleancopy.ast import EmbeddingBlockNode
-from cleancopy.ast import InlineFormatting
 from cleancopy.ast import InlineNodeInfo
 from cleancopy.ast import IntDataType
 from cleancopy.ast import List_
@@ -63,7 +62,8 @@ from cleancopy.cst import CSTMetadataVariable
 from cleancopy.cst import CSTNode
 from cleancopy.cst import CSTRichtext
 from cleancopy.exceptions import MultipleDocumentMetadatas
-from cleancopy.spectypes import MetadataMagics
+from cleancopy.spectypes import InlineFormatting
+from cleancopy.spectypes import InlineMetadataMagic
 
 logger = logging.getLogger(__name__)
 _depth_tracker: ContextVar[int] = ContextVar('_depth_tracker', default=0)
@@ -249,11 +249,11 @@ class Abstractifier:
                             info=nested_info,
                             content=[])
                         nested_info._add(MetadataAssignment(
-                            key=MetadataMagics.sugared.value,
-                            value=BoolDataType(value=True)))
+                            key=InlineMetadataMagic.sugared.value,
+                            data=BoolDataType(value=True)))
                         nested_info._add(MetadataAssignment(
-                            key=MetadataMagics.fmt.value,
-                            value=StrDataType(value=this_fmt_marker)))
+                            key=InlineMetadataMagic.formatting.value,
+                            data=StrDataType(value=this_fmt_marker)))
                         fmt_stack.append(_FmtStackState(
                             current_span=nested_richtext,
                             fmt_marker=this_fmt_marker))
@@ -340,9 +340,11 @@ class Abstractifier:
         target = self._convert_metadata(cst_node.target)
         info = InlineNodeInfo()
         info._add(MetadataAssignment(
-            key=MetadataMagics.sugared.value, value=BoolDataType(value=True)))
+            key=InlineMetadataMagic.sugared.value,
+            data=BoolDataType(value=True)))
         info._add(MetadataAssignment(
-            key=MetadataMagics.target.value, value=target))
+            key=InlineMetadataMagic.target.value,
+            data=target))
 
         span_content = cst_node.content
         if span_content is None:
@@ -357,7 +359,7 @@ class Abstractifier:
     def _(self, cst_node: CSTMetadataAssignment) -> MetadataAssignment:
         return MetadataAssignment(
             key=cst_node.key.value,
-            value=self._convert_metadata(cst_node.value))
+            data=self._convert_metadata(cst_node.value))
 
     @_convert.register
     def _(self, cst_node: CSTAnnotation) -> Annotation:

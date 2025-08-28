@@ -9,6 +9,8 @@ from cleancopy import parse
 from cleancopy.ast import Document
 from cleancopy.ast import Paragraph
 from cleancopy.ast import RichtextBlockNode
+from cleancopy.ast import StrDataType
+from cleancopy.spectypes import BlockFormatting
 from cleancopy.utils import dedoc
 
 from cleancopy_testutils import doc_prep
@@ -96,3 +98,41 @@ class TestRichtextBlockNode:
         assert result[1].depth == 1
         assert isinstance(result[1].content[1], RichtextBlockNode)
         assert result[1].content[1].depth == 2
+
+    def test_quote(self):
+        transformer = Abstractifier()
+        result = dedoc(transformer.convert(parse(doc_prep('''
+            foo
+
+            >
+            __formatting__: '__quote__'
+            __citation__: 'confucious'
+                ## said the wise man...
+                bar'''))))
+
+        assert isinstance(result[0], Paragraph)
+        assert isinstance(result[1], RichtextBlockNode)
+        blocknode = result[1]
+        assert blocknode.info is not None
+        assert blocknode.info.formatting is not None
+        assert blocknode.info.formatting is BlockFormatting.QUOTE
+        assert blocknode.info.citation is not None
+        assert blocknode.info.citation == StrDataType('confucious')
+
+    def test_arbitrary_metadata(self):
+        transformer = Abstractifier()
+        result = dedoc(transformer.convert(parse(doc_prep('''
+            foo
+
+            >
+            foo: 'oof'
+            bar: 'rab'
+                some inner text'''))))
+
+        assert isinstance(result[1], RichtextBlockNode)
+        blocknode = result[1]
+        assert blocknode.info is not None
+        assert 'foo' in blocknode.info.metadata
+        assert 'bar' in blocknode.info.metadata
+        assert blocknode.info.metadata['foo'] == StrDataType('oof')
+        assert blocknode.info.metadata['bar'] == StrDataType('rab')
