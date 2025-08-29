@@ -147,8 +147,6 @@ def handle_node(field_name: _TSNamedField, node: TSNode) -> CSTNode | None:
     handler = _TS_NODE_REGISTRY.get(field_name)
 
     if handler is None:
-        print(_TS_NODE_REGISTRY)
-        print(field_name)
         logger.warning(
             'Node type %s not yet implemented: grammar_name %s, field_name %s',
             node.type, node.grammar_name, field_name)
@@ -197,6 +195,7 @@ def process_document_root(node: TSNode) -> CSTDocument:
             if first_nonempty_encountered:
                 filtered_content.append(child_cst_node)
         else:
+            first_nonempty_encountered = True
             filtered_content.append(child_cst_node)
 
     # Note that the AST document might have a title and/or metadata, but ONLY
@@ -376,7 +375,6 @@ def process_richtext_line(node: TSNode) -> CSTRichtext:
         ):
             result.content.append(process_fmt_bracket(child))
         else:
-            print(child.type)
             raise TypeError(
                 'Invalid richtext line child type!',
                 child, child.type, child.grammar_name)
@@ -545,16 +543,24 @@ def process_metadata_value(  # noqa: C901, PLR0911, PLR0912
         return CSTMetadataDecimal(value=Decimal(first_child.text.decode()))
     elif first_child.type == _TSValueTypes.MENTION:
         return CSTMetadataMention(
-            value=_normalize_sugarable_string(first_child))
+            value=_normalize_sugarable_string(
+                first_child,
+                strip_prefix='@'),)
     elif first_child.type == _TSValueTypes.TAG:
         return CSTMetadataTag(
-            value=_normalize_sugarable_string(first_child))
+            value=_normalize_sugarable_string(
+                first_child,
+                strip_prefix='#'),)
     elif first_child.type == _TSValueTypes.VARIABLE:
         return CSTMetadataVariable(
-            value=_normalize_sugarable_string(first_child))
+            value=_normalize_sugarable_string(
+                first_child,
+                strip_prefix='%'),)
     elif first_child.type == _TSValueTypes.REF:
         return CSTMetadataReference(
-            value=_normalize_sugarable_string(first_child))
+            value=_normalize_sugarable_string(
+                first_child,
+                strip_prefix='&'),)
     else:
         raise TypeError('Invalid metadata value type!', first_child)
 
@@ -563,16 +569,24 @@ def process_metadata_value(  # noqa: C901, PLR0911, PLR0912
 def process_fmt_bracket_link_target(node: TSNode) -> CSTMetadataTarget:
     if node.type == _TSValueTypes.MENTION:
         return CSTMetadataMention(
-            value=_normalize_sugarable_string(node))
+            value=_normalize_sugarable_string(
+                node,
+                strip_prefix='@'))
     elif node.type == _TSValueTypes.TAG:
         return CSTMetadataTag(
-            value=_normalize_sugarable_string(node))
+            value=_normalize_sugarable_string(
+                node,
+                strip_prefix='#'))
     elif node.type == _TSValueTypes.VARIABLE:
         return CSTMetadataVariable(
-            value=_normalize_sugarable_string(node))
+            value=_normalize_sugarable_string(
+                node,
+                strip_prefix='%'))
     elif node.type == _TSValueTypes.REF:
         return CSTMetadataReference(
-            value=_normalize_sugarable_string(node))
+            value=_normalize_sugarable_string(
+                node,
+                strip_prefix='&'))
     elif node.type == _TSValueTypes.URI:
         return _normalize_sugarable_string(node)
     else:
@@ -692,7 +706,11 @@ def _add_or_merge_content(
         content.append(line)
 
 
-def _normalize_sugarable_string(node: TSNode) -> CSTMetadataStr:
+def _normalize_sugarable_string(
+        node: TSNode,
+        *,
+        strip_prefix: str | None = None
+        ) -> CSTMetadataStr:
     """Sugarable strings can be either a sugared string, which is a
     node with no children and only text, or a nested STRING1|STRING2
     within the children of the node.
@@ -710,6 +728,16 @@ def _normalize_sugarable_string(node: TSNode) -> CSTMetadataStr:
     elif node.text is None:
         raise ValueError('Sugarable string must have content!', node)
     else:
+        # This is either a metadata key, which is just a plain string, or
+        # a mention, tags, etc. In the case of those special sugars, note that
+        # this will include the leading ``@|#|%|&``.
+        raw_sugared_string = node.text.decode()
+
+        if strip_prefix is None:
+            normalized_value = raw_sugared_string
+        else:
+            normalized_value = raw_sugared_string.lstrip(strip_prefix)
+
         return CSTMetadataStr(
-            value=node.text.decode(),
+            value=normalized_value,
             quote_style=None)

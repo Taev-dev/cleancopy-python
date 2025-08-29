@@ -47,6 +47,14 @@ class CSTDocumentNode[
     metadata: list[CSTMetadataAssignment | CSTAnnotation | CSTEmptyLine]
     content: C | None
 
+    @property
+    def nonempty_metadata(self) -> list[CSTMetadataAssignment | CSTAnnotation]:
+        """Same as metadata, but filters out empty lines.
+        """
+        return [
+            metadata for metadata in self.metadata
+            if not isinstance(metadata, CSTEmptyLine)]
+
 
 @dataclass(kw_only=True)
 class CSTDocumentNodeTitle(CSTNode):
