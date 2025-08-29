@@ -44,6 +44,9 @@ class BlockMetadataMagic(Enum):
     is_doc_metadata = '__doc_meta__'
     fallback = '__fallback__'
     source = '__source__'
+    style_modifiers = '__style_modifiers__'
+    semantic_modifiers = '__semantic_modifiers__'
+    layout_modifiers = '__layout_modifiers__'
 
 
 class InlineMetadataMagic(Enum):
@@ -55,3 +58,6 @@ class InlineMetadataMagic(Enum):
     formatting = '__formatting__'
     citation = '__citation__'
     sugared = '__sugared__'
+    style_modifiers = '__style_modifiers__'
+    semantic_modifiers = '__semantic_modifiers__'
+    layout_modifiers = '__layout_modifiers__'

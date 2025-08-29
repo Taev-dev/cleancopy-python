@@ -213,11 +213,13 @@ class Abstractifier:
 
     @_convert.register
     def _(self, cst_node: CSTRichtext) -> RichtextInlineNode:
-        outermost_span = RichtextInlineNode(
-            info=None,
-            content=[])
+        outermost_span = RichtextInlineNode(info=None, content=[])
         fmt_stack: list[_FmtStackState] = [
-            _FmtStackState(outermost_span, None)]
+            _FmtStackState(
+                # Note: this won't be used for the root node on the stack.
+                index_in_parent=0,
+                current_span=outermost_span,
+                fmt_marker=None)]
 
         for child_cst_node in cst_node.content:
             if isinstance(child_cst_node, str):
@@ -228,63 +230,60 @@ class Abstractifier:
             # Status check:
             # child_cst_node:
             #   CSTFormattingMarker | CSTFmtBracketLink | CSTFmtBracketMetadata
+            # tl;dr: we just encountered a change in the formatting, which
+            # means we need to mutate the stack.
             else:
-                stale_stack_state = fmt_stack[-1]
-
-                if stale_stack_state.to_join:
-                    span_text = ''.join(stale_stack_state.to_join)
-                    stale_stack_state.to_join.clear()
-                    stale_stack_state.current_span.content.append(span_text)
+                fmt_stack_state = fmt_stack[-1]
+                fmt_stack_state.merge_pending_content()
 
                 if isinstance(child_cst_node, CSTFormattingMarker):
                     this_fmt_marker = child_cst_node.marker
-                    if this_fmt_marker == stale_stack_state.fmt_marker:
+                    # We just encountered a second instance of the marker we
+                    # were already processing, which means we're exiting that
+                    # context.
+                    if this_fmt_marker == fmt_stack_state.fmt_marker:
+                        # This is just defensive; it shouldn't be possible for
+                        # this to have drifted apart from the fmt_stack_state.
                         span_to_pop = fmt_stack.pop()
-                        if span_to_pop.to_join:
-                            span_to_pop.current_span.content.append(
-                                ''.join(span_to_pop.to_join))
+                        if span_to_pop is not fmt_stack_state:
+                            raise RuntimeError(
+                                'Impossible branch: divergent fmt stack state',
+                                fmt_stack)
+
+                        # We JUST mutated the stack, so this won't be the same
+                        # as span_to_pop/fmt_stack_state!
+                        parent_span = fmt_stack[-1]
+                        parent_span.finalize_child(fmt_stack_state)
+
+                    # This is a new formatting marker -- but NOT a bracket
+                    # sugar. Therefore, we need to grow the stack.
                     else:
-                        nested_info = InlineNodeInfo()
-                        nested_richtext = RichtextInlineNode(
-                            info=nested_info,
-                            content=[])
-                        nested_info._add(MetadataAssignment(
-                            key=InlineMetadataMagic.sugared.value,
-                            data=BoolDataType(value=True)))
-                        nested_info._add(MetadataAssignment(
-                            key=InlineMetadataMagic.formatting.value,
-                            data=StrDataType(value=this_fmt_marker)))
-                        fmt_stack.append(_FmtStackState(
-                            current_span=nested_richtext,
-                            fmt_marker=this_fmt_marker))
-                        stale_stack_state.current_span.content.append(
-                            nested_richtext)
+                        fmt_stack.append(
+                            fmt_stack_state.provision_child(this_fmt_marker))
 
                 else:
                     # Note: this doesn't get added to the formatting stack,
-                    # because it's a whole self-contained thing
+                    # because it's a whole self-contained thing with its
+                    # own ``_convert`` implementation
                     nested_richtext = cast(
                         RichtextInlineNode, self._convert(child_cst_node))
-                    stale_stack_state.current_span.content.append(
+                    fmt_stack_state.current_span.content.append(
                         nested_richtext)
-                    # fmt_stack.append(_FmtStackState(
-                    #     current_span=nested_richtext,
-                    #     fmt_marker=None))
 
-        if (
-            len(fmt_stack) != 1
-            or fmt_stack[-1].current_span is not outermost_span
-        ):
-            raise RuntimeError('Failed to fully exhaust richtext fmt stack!')
+        if len(fmt_stack) != 1:
+            raise RuntimeError(
+                'Failed to properly exhaust richtext fmt stack!', fmt_stack)
+        root_stack_state, = fmt_stack
+        if root_stack_state.current_span is not outermost_span:
+            raise RuntimeError(
+                'Richtext fmt stack drifted out of sync!', fmt_stack)
 
-        outermost_stack_state, = fmt_stack
-        outermost_span.content.append(''.join(outermost_stack_state.to_join))
-
+        root_stack_state.merge_pending_content()
         # Note: because we've had BOTH the stack AND been constructing the
         # inline node as we go along, we don't need to manipulate the tree at
         # all; we already have it fully constructed and can simply return the
-        # outermost span.
-        return outermost_span
+        # (reduced) outermost span.
+        return root_stack_state.reduced
 
     @_convert.register
     def _(self, cst_node: CSTList) -> List_:
@@ -326,14 +325,7 @@ class Abstractifier:
             info._add(
                 cast(MetadataAssignment, self._convert(child_metadata)))
 
-        span_content = cst_node.content
-        if span_content is None:
-            return RichtextInlineNode(info=info, content=[])
-        else:
-            return RichtextInlineNode(
-                info=info,
-                content=[
-                    cast(RichtextInlineNode, self._convert(span_content))])
+        return self._convert_bracketed_richtext(cst_node.content, info)
 
     @_convert.register
     def _(self, cst_node: CSTFmtBracketLink) -> RichtextInlineNode:
@@ -346,14 +338,40 @@ class Abstractifier:
             key=InlineMetadataMagic.target.value,
             data=target))
 
-        span_content = cst_node.content
+        return self._convert_bracketed_richtext(cst_node.content, info)
+
+    def _convert_bracketed_richtext(
+            self,
+            span_content: CSTRichtext | None,
+            info: InlineNodeInfo,
+            ) -> RichtextInlineNode:
         if span_content is None:
             return RichtextInlineNode(info=info, content=[])
         else:
-            return RichtextInlineNode(
-                info=info,
-                content=[
-                    cast(RichtextInlineNode, self._convert(span_content))])
+            nested_richtext = cast(
+                RichtextInlineNode, self._convert(span_content))
+
+            # So the tricky thing here is that the contained richtext doesn't
+            # know that it's already inside a richtext context. Therefore, it
+            # will always create its own root context with an info of None,
+            # creating undesired wrapping. This is a bit of a hack, but it's
+            # also the easiest way of dealing with it.
+            # Note that the richtext collapsing logic will actually result
+            # in any non-None formatting contexts to bubble up, so we do need
+            # to make sure it's actually None and not just blindly extract it.
+            if nested_richtext.info is None:
+                return RichtextInlineNode(
+                    info=info,
+                    content=nested_richtext.content)
+
+            else:
+                return RichtextInlineNode(
+                    info=info,
+                    # This is a bit confusing with the explicit singular
+                    # ``[child]``, but in any other case, the nesting will be
+                    # such that the collapsing logic won't apply, and we'll
+                    # have a wrapped info=None context, which is handled above.
+                    content=[nested_richtext])
 
     @_convert.register
     def _(self, cst_node: CSTMetadataAssignment) -> MetadataAssignment:
@@ -482,11 +500,71 @@ class _RootNodeContentHelper[T](list[T]):
             super(_RootNodeContentHelper, self).append(item)
 
 
-@dataclass
+@dataclass(slots=True)
 class _FmtStackState:
+    index_in_parent: int
+    # We have one of these per depth, and it never changes for the life of the
+    # stack.
     current_span: RichtextInlineNode
     fmt_marker: InlineFormatting | None
+    # This is used and reused multiple times over the course of the stack.
     to_join: list[str] = field(default_factory=list)
+
+    def provision_child(self, marker: InlineFormatting) -> _FmtStackState:
+        """Call this on a parent to create new stack node, along with
+        its associated ``RichtextInlineNode`` and nodeinfo. This also
+        manages all of our bookkeeping re: ``finalize_child``.
+        """
+        nested_info = InlineNodeInfo()
+        nested_richtext = RichtextInlineNode(
+            info=nested_info,
+            content=[])
+        nested_info._add(MetadataAssignment(
+            key=InlineMetadataMagic.sugared.value,
+            data=BoolDataType(value=True)))
+        nested_info._add(MetadataAssignment(
+            key=InlineMetadataMagic.formatting.value,
+            data=StrDataType(value=marker)))
+
+        child_index = len(self.current_span.content)
+        # Note: this will be replaced during finalization based on the
+        # child_index above.
+        self.current_span.content.append('')
+
+        return _FmtStackState(
+            child_index,
+            current_span=nested_richtext,
+            fmt_marker=marker)
+
+    def finalize_child(self, child: _FmtStackState):
+        """Call this on the parent to finalize one of its children (when
+        exiting the child's stack state).
+        """
+        self.current_span.content[child.index_in_parent] = child.reduced
+
+    def merge_pending_content(self):
+        """Empties to_join into the current span's content.
+        Call this before you encounter a new formatting tag.
+        """
+        if self.to_join:
+            self.current_span.content.append(
+                ''.join(self.to_join))
+            self.to_join.clear()
+
+    @property
+    def reduced(self) -> RichtextInlineNode:
+        """Checks to see if the current node has no normatting marker
+        **and** the current span is empty except for another node. If
+        so, returns the nested node. Otherwise, returns the current one.
+        """
+        if (
+            self.fmt_marker is None
+            and len(self.current_span.content) == 1
+            and isinstance(self.current_span.content[0], RichtextInlineNode)
+        ):
+            return self.current_span.content[0]
+        else:
+            return self.current_span
 
 
 @overload

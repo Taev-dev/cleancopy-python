@@ -13,7 +13,9 @@ from typing import Any
 from typing import ClassVar
 from typing import Protocol
 
+from docnote import DocnoteConfig
 from docnote import Note
+from docnote import docnote
 
 from cleancopy.spectypes import BlockFormatting
 from cleancopy.spectypes import BlockMetadataMagic
@@ -108,6 +110,31 @@ class ListItem(ASTNode):
     content: list[Paragraph]
 
 
+type _RecStrList = list[str | _RecStrList]
+
+
+@dataclass
+class _RecInfoList(list['None | _RecInfoList']):
+    info: InlineNodeInfo | None
+
+    def flatten(self, indices: list[int]) -> list[InlineNodeInfo | None]:
+        """Traverses the tree and extracts the values based on the
+        provided indices, returning them as a list, with the index of
+        the list item corresponding to the depth in the tree.
+        """
+        retval: list[InlineNodeInfo | None] = []
+        current_node: _RecInfoList | None = self
+        # The zero here is just so that we do an extra iteration at the tail
+        # to get the last element; the result never gets used.
+        for index in [*indices, 0]:
+            if current_node is None:
+                raise TypeError('Cannot index into a null nodeinfo!')
+            retval.append(current_node.info)
+            current_node = current_node[index]
+
+        return retval
+
+
 @dataclass(kw_only=True, slots=True)
 class RichtextInlineNode(ASTNode):
     info: InlineNodeInfo | None
@@ -124,6 +151,30 @@ class RichtextInlineNode(ASTNode):
         else:
             return not all(
                 isinstance(segment, Annotation) for segment in self.content)
+
+    @docnote(config=DocnoteConfig(include_in_docs=False))
+    def recursive_strip(self) -> tuple[_RecStrList, _RecInfoList]:
+        """This converts the node into a recursive list of strings (and
+        list of ...) that matches the structure of the node and its
+        children. It also does the same with the infos, coercing any
+        strings to None.
+
+        Should not be considered part of the public API for the library.
+        Meant for debugging and tests.
+        """
+        contents: _RecStrList = []
+        infos: _RecInfoList = _RecInfoList(info=self.info)
+
+        for child in self.content:
+            if isinstance(child, str):
+                contents.append(child)
+                infos.append(None)
+            else:
+                rec_contents, rec_infos = child.recursive_strip()
+                contents.append(rec_contents)
+                infos.append(rec_infos)
+
+        return contents, infos
 
 
 @dataclass(kw_only=True, slots=True)
@@ -157,6 +208,10 @@ class NodeInfo[T: MetadataAssignment | Annotation](
 
     target: LinkTarget | None = None
     crossref: StrDataType | None = None
+    style_modifiers: StrDataType | None = None
+    semantic_modifiers: StrDataType | None = None
+    layout_modifiers: StrDataType | None = None
+
     metadata: Annotated[
             dict[str, DataType],
             Note('''Any normalized metadata values (ie, ``__missing__``
@@ -244,7 +299,7 @@ class InlineNodeInfo(NodeInfo[MetadataAssignment]):
     icu_1: ReferenceDataType | None = None
     formatting: InlineFormatting | None = None
     citation: StrDataType | None = None
-    sugared: bool | None = None
+    sugared: BoolDataType | None = None
 
 
 @_MemoizedFieldNames.memoize
